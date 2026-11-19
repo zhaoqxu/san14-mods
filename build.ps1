@@ -9,6 +9,7 @@ param(
     [string]$ScenarioFile='',
     [switch]$Offline,
     [string]$AdapterArchive='',
+    [string]$AdapterPackage='',
     [switch]$SkipGameAdapter
 )
 $ErrorActionPreference='Stop'
@@ -29,6 +30,11 @@ try{
     $env:PATH=(Split-Path -Parent $Python)+';'+$env:PATH
     $env:PYINSTALLER_CONFIG_DIR=Join-Path $ArtifactRoot 'pyinstaller-cache'
     if($Target -in @('all','manager') -and -not $SkipGameAdapter){
+        if($AdapterPackage){
+            if($AdapterArchive){throw 'Select AdapterPackage or AdapterArchive'}
+            & $Python -B (Join-Path $root 'tools/stage_adapter.py') --source $AdapterPackage --output (Join-Path $ArtifactRoot 'adapter-package')
+            if($LASTEXITCODE){throw 'Local binary GameAdapter validation failed'}
+        }else{
         if($Tests){
             & $Python -B (Join-Path $root 'tests/test_fetch_adapter.py')
             if($LASTEXITCODE){throw 'GameAdapter download tests failed'}
@@ -38,6 +44,7 @@ try{
         if($AdapterArchive){$fetchArgs+=@('--archive',$AdapterArchive)}
         & $Python -B (Join-Path $root 'tools/fetch_adapter.py') @fetchArgs
         if($LASTEXITCODE){throw 'Pinned GameAdapter download or verification failed'}
+        }
     }
     if($Target -in @('all','worker')){
         & $Python -B (Join-Path $root 'manager/worker/build_worker.py') --output $worker
