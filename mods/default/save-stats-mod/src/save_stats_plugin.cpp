@@ -17,8 +17,24 @@ bool contribution_registered=false,battlefield_lease=false,battlefield_enabled=t
 uint32_t battlefield_caps=0;
 std::map<uint32_t,OutcomeRow> contribution_values;
 constexpr const char* battlefield_key="battlefield.recording";
-bool battlefield_supported(){return host&&host->struct_size>=offsetof(San14HostApi,battlefield)+sizeof(host->battlefield)&&host->battlefield&&host->battlefield->struct_size>=sizeof(San14BattlefieldApi)&&host->battlefield->capabilities&&host->battlefield->set_recording&&host->battlefield->query_officer&&host->roster_tabs&&host->roster_tabs->struct_size>=sizeof(San14RosterTabsApi)&&host->roster_tabs->register_named_tab&&host->roster_tabs->unregister_named_tab;}
+bool battlefield_supported(){return host&&host->struct_size>=offsetof(San14HostApi,battlefield)+sizeof(host->battlefield)&&host->battlefield&&host->battlefield->struct_size>=SAN14_BATTLEFIELD_API_V1_SIZE&&host->battlefield->capabilities&&host->battlefield->set_recording&&host->battlefield->query_officer&&host->roster_tabs&&host->roster_tabs->struct_size>=sizeof(San14RosterTabsApi)&&host->roster_tabs->register_named_tab&&host->roster_tabs->unregister_named_tab;}
 
+San14Result context(San14SaveStorageInfo&);
+std::array<bool,3> territory_registered{};
+std::array<std::map<uint32_t,int64_t>,3> territory_values;
+bool territory_supported(){return battlefield_supported()&&host->battlefield->struct_size>=sizeof(San14BattlefieldApi)&&host->battlefield->query_deaths&&host->struct_size>=offsetof(San14HostApi,territory_tabs)+sizeof(host->territory_tabs)&&host->territory_tabs&&host->territory_tabs->struct_size>=sizeof(San14TerritoryTabsApi)&&host->territory_tabs->register_tab&&host->territory_tabs->unregister_tab;}
+San14Result SAN14_MOD_CALL territory_refresh(void* context_value){
+ const auto kind=uint32_t(uintptr_t(context_value));if(kind!=1&&kind!=2)return SAN14_E_INVALID_ARGUMENT;
+ auto& rows=territory_values[kind];rows.clear();if(!active)return SAN14_E_PERMISSION_DENIED;
+ try{San14SaveStorageInfo before{};if(context(before)!=SAN14_OK||before.state!=SAN14_STORAGE_READY)return SAN14_OK;
+ for(unsigned id=1;id<=(kind==1?51u:500u);++id){San14BattlefieldDeaths d{sizeof(d)};if(host->battlefield->query_deaths(host->host_context,kind,id,&d)==SAN14_OK&&d.available)rows[id]=int64_t((std::min)(d.soldiers_dead,uint64_t(INT64_MAX)));}
+ San14SaveStorageInfo after{};if(context(after)!=SAN14_OK||after.revision!=before.revision)rows.clear();
+ }catch(...){rows.clear();}return SAN14_OK;
+}
+San14Result SAN14_MOD_CALL territory_value(void* context_value,uint32_t id,uint32_t column,int64_t* out){
+ const auto kind=uint32_t(uintptr_t(context_value));if(!out||column||kind<1||kind>2)return SAN14_E_INVALID_ARGUMENT;if(!active)return SAN14_E_PERMISSION_DENIED;
+ const auto it=territory_values[kind].find(id);if(it==territory_values[kind].end())return SAN14_E_NOT_FOUND;*out=it->second;return SAN14_OK;
+}
 bool history_lease=false,history_action=false;
 uint32_t records_caps=0;
 constexpr const char* domestic_key="domestic.recording";
@@ -69,7 +85,7 @@ San14Result apply_history(bool enabled){
     history_action=enabled;return SAN14_OK;
 }
 void clear_values(){values.clear();}
-void discard(){contribution_values.clear();baseline.clear();baseline_valid=false;clear_values();domestic_values.clear();battle_values.clear();}
+void discard(){for(auto& rows:territory_values)rows.clear();contribution_values.clear();baseline.clear();baseline_valid=false;clear_values();domestic_values.clear();battle_values.clear();}
 void reset_context(){discard();have_context=false;revision=0;storage_state=SAN14_STORAGE_UNAVAILABLE;playthrough.clear();}
 uint32_t mask(){uint32_t result=1;for(unsigned i=0;i<5;++i)if(visible[i])result|=1u<<(i+1);return result;}
 San14Result context(San14SaveStorageInfo& out){out={};out.struct_size=sizeof(out);return host->save_storage->context(host->host_context,&out);}
@@ -261,12 +277,14 @@ San14Result SAN14_MOD_CALL on_load(San14ModContext*){
     if(const auto result=host->settings.register_bool(host->host_context,&domestic_spec);result!=SAN14_OK)return result;
     const San14BoolSetting battle_spec{sizeof(battle_spec),text(battle_key),text(u8"记录武将战斗结果"),text(u8"累计单挑胜败、歼灭敌队、被灭队、攻克城池、俘虏敌将和被俘次数。俘虏敌将不含破城俘虏。平局不记胜败；胜率百分数保留一位小数，无胜败记录显示“-”。兵力与战法数据由“记录战斗贡献与地区战况”控制。关闭保留数据，读档同步回退。"),1,setting,nullptr,text(u8"战斗统计"),0};
     if(const auto result=host->settings.register_bool(host->host_context,&battle_spec);result!=SAN14_OK)return result;
-    const San14BoolSetting contribution_spec{sizeof(contribution_spec),text(battlefield_key),text(u8"记录战斗贡献与地区战况"),text(u8"累计实际杀伤、战损、城防耐久伤害、具体战法发动与连携主发动／跟随次数。连携合并杀伤按计算贡献比例分配。地区累计受击方的实际战斗减员，包含伤兵，不等于阵亡人数。只记开启后的事件，读档回退；各战法明细及地区战况可在武将事迹页查看。"),battlefield_supported()?1:0,setting,nullptr,text(u8"战斗统计"),battlefield_supported()?0u:SAN14_BOOL_SETTING_DISABLED};
+    const San14BoolSetting contribution_spec{sizeof(contribution_spec),text(battlefield_key),text(u8"记录战斗贡献与地区战况"),text(u8"累计实际杀伤、战损、城防耐久伤害、具体战法发动与连携主发动／跟随次数。连携合并杀伤按计算贡献比例分配。地区累计受击方的实际战斗减员，包含伤兵，不等于阵亡人数。只记开启后的事件，读档回退；个人战法明细在事迹页查看。自势力／全势力的城市、区域表新增“战斗”，统计各方在当地的累计阵亡士兵，扣除伤兵并排除转移；城市按固定所属区域汇总。阵亡仅从本功能开启后累计，旧战斗不能补算。"),battlefield_supported()?1:0,setting,nullptr,text(u8"战斗统计"),battlefield_supported()?0u:SAN14_BOOL_SETTING_DISABLED};
     if(const auto result=host->settings.register_bool(host->host_context,&contribution_spec);result!=SAN14_OK)return result;
     return SAN14_OK;
 }
 San14Result SAN14_MOD_CALL on_disable(San14ModContext*){
     active=false;bool busy=false;
+    for(unsigned kind=1;kind<=2;++kind)if(territory_registered[kind]){auto r=host->territory_tabs->unregister_tab(host->host_context,kind,text("battle"));if(r==SAN14_OK||r==SAN14_E_NOT_FOUND)territory_registered[kind]=false;else busy=true;}
+    for(auto& rows:territory_values)rows.clear();
     if(battlefield_lease&&battlefield_supported()){auto r=host->battlefield->set_recording(host->host_context,0);if(r==SAN14_OK||r==SAN14_E_NOT_FOUND)battlefield_lease=false;else busy=true;}
     if(contribution_registered){auto r=host->roster_tabs->unregister_named_tab(host->host_context,text("contribution"));if(r==SAN14_OK||r==SAN14_E_NOT_FOUND)contribution_registered=false;else busy=true;}
     contribution_values.clear();battlefield_caps=0;
@@ -337,6 +355,11 @@ San14Result SAN14_MOD_CALL on_enable(San14ModContext*){
             std::array<San14RosterColumn,8> cols{};for(size_t i=0;i<8;++i)cols[i]={sizeof(San14RosterColumn),text(contribution_labels[i]),0,0};
             const San14RosterTabSpec contribution_spec{sizeof(contribution_spec),text(u8"战功"),cols.data(),8,255,contribution_refresh,contribution_value,nullptr};
             r=host->roster_tabs->register_named_tab(host->host_context,text("contribution"),&contribution_spec);if(r!=SAN14_OK){on_disable(nullptr);return r;}contribution_registered=true;
+        }
+        if(territory_supported()&&(battlefield_caps&SAN14_BATTLEFIELD_DEATHS)){
+            const San14RosterColumn col{sizeof(col),text(u8"累计阵亡士兵"),SAN14_ROSTER_COLUMN_DASH_IF_MISSING,0};
+            for(unsigned kind=1;kind<=2;++kind){const San14TerritoryTabSpec tab{sizeof(tab),text(u8"战斗"),&col,1,1,territory_refresh,territory_value,reinterpret_cast<void*>(uintptr_t(kind))};
+                auto r=host->territory_tabs->register_tab(host->host_context,kind,text("battle"),&tab);if(r==SAN14_E_UNSUPPORTED)break;if(r!=SAN14_OK){on_disable(nullptr);return r;}territory_registered[kind]=true;}
         }
         sync_context();return SAN14_OK;
     }catch(...){on_disable(nullptr);return SAN14_E_PLUGIN_FAILED;}

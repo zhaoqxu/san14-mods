@@ -16,3 +16,5 @@ SDK 位于统一仓库的 `sdk/`，不依赖其它 Git 仓库即可编译插件�
 SDK 的 memory-reader 示例仅通过权限受控接口验证模块 PE 头，不包含游戏数据布局或固定内存地址。正式功能应使用世界、武将、规则、UI 或自动化等语义接口。
 
 战功和武将事迹中的战斗地点使用可选 [战功统计接口](docs/BATTLEFIELD_STATS.md)。
+
+城市与区域的阵亡统计使用可选 [战斗页签接口](docs/TERRITORY_BATTLE_STATS.md)。
