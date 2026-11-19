@@ -228,13 +228,13 @@ struct AbConfig {
 };
 
 inline uint32_t parse_profile_spec(const std::string& spec, uint32_t base_mask) {
-    if (spec.empty() || spec == "default" || spec == "fused") {
+    if (spec.empty() || spec == "default") {
         return base_mask ? base_mask : (SAN14_TACTICAL_MOD_ALL_NEW8 | SAN14_TACTICAL_MOD_ALL_LEGACY3);
     }
+    if (spec == "fused" || spec == "all") return SAN14_TACTICAL_MOD_ALL_NEW8 | SAN14_TACTICAL_MOD_ALL_LEGACY3;
     if (spec == "vanilla" || spec == "off" || spec == "none" || spec == "0") return 0u;
     if (spec == "legacy") return SAN14_TACTICAL_MOD_ALL_LEGACY3;
     if (spec == "new8") return SAN14_TACTICAL_MOD_ALL_NEW8;
-    if (spec == "all") return SAN14_TACTICAL_MOD_ALL_NEW8 | SAN14_TACTICAL_MOD_ALL_LEGACY3;
     if (spec.rfind("0x", 0) == 0 || spec.rfind("0X", 0) == 0) {
         return static_cast<uint32_t>(std::strtoul(spec.c_str(), nullptr, 16));
     }
@@ -797,6 +797,12 @@ inline bool is_player_force_id(const San14TacticalWorld* w, uint32_t force_id) {
     return true;
 }
 
+inline bool has_host_ab_provider(const San14TacticalHostOps* ops) {
+    return ops &&
+           ops->struct_size >= offsetof(San14TacticalHostOps, get_force_ab_override) + sizeof(ops->get_force_ab_override) &&
+           ops->get_force_ab_override != nullptr;
+}
+
 inline uint32_t effective_mask_for_force(
     const State& st,
     const San14TacticalWorld* w,
@@ -807,15 +813,14 @@ inline uint32_t effective_mask_for_force(
     const uint32_t base = st.config.to_mask();
 
     // 1. Check Host-provided per-force A/B override first (adapter env or harness).
-    if (ops && ops->struct_size >= offsetof(San14TacticalHostOps, get_force_ab_override) + sizeof(ops->get_force_ab_override) &&
-        ops->get_force_ab_override) {
+    if (has_host_ab_provider(ops)) {
         San14TacticalForceAbOverride ov{sizeof(ov)};
         if (ops->get_force_ab_override(ops->ops_context, force_id, &ov) == SAN14_OK && ov.has_override) {
             switch (ov.mode) {
                 case SAN14_TACTICAL_AB_VANILLA: return 0u;
-                case SAN14_TACTICAL_AB_LEGACY: return base & SAN14_TACTICAL_MOD_ALL_LEGACY3;
-                case SAN14_TACTICAL_AB_NEW8: return base & SAN14_TACTICAL_MOD_ALL_NEW8;
-                case SAN14_TACTICAL_AB_FUSED: return base ? base : (SAN14_TACTICAL_MOD_ALL_NEW8 | SAN14_TACTICAL_MOD_ALL_LEGACY3);
+                case SAN14_TACTICAL_AB_LEGACY: return SAN14_TACTICAL_MOD_ALL_LEGACY3;
+                case SAN14_TACTICAL_AB_NEW8: return SAN14_TACTICAL_MOD_ALL_NEW8;
+                case SAN14_TACTICAL_AB_FUSED: return SAN14_TACTICAL_MOD_ALL_NEW8 | SAN14_TACTICAL_MOD_ALL_LEGACY3;
                 case SAN14_TACTICAL_AB_CUSTOM_MASK: return ov.enabled_module_mask;
                 case SAN14_TACTICAL_AB_ALL_ACTIVE:
                 default: break;

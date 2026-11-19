@@ -2839,7 +2839,8 @@ inline void SAN14_MOD_CALL on_daily_tactical_tick(
     if (!plugin_context || !w || !ops) return;
     auto* st = static_cast<State*>(plugin_context);
     std::lock_guard<std::mutex> lock(st->mutex);
-    if (!st->config.any_new8() && !st->ab.active) return;
+    const bool may_have_ab = st->ab.active || has_host_ab_provider(ops);
+    if (!st->config.any_new8() && !may_have_ab) return;
 
     const uint32_t date_key = w->year * 10000u + w->month * 100u + w->day;
     const int32_t today = day_number(w->year, w->month, w->day);

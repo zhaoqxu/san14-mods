@@ -820,19 +820,20 @@ inline void SAN14_MOD_CALL on_strategy_update(
     std::lock_guard<std::mutex> lock(st->mutex);
     cache_world_metadata(*st, w);
     const auto cfg = st->config;
-    if (!cfg.any_legacy3() && !st->ab.active) return;
+    const bool may_have_ab = st->ab.active || has_host_ab_provider(ops);
+    if (!cfg.any_legacy3() && !may_have_ab) return;
 
     if (phase == SAN14_TACTICAL_PHASE_PLANNING) {
-        if (cfg.emergency_reinforcement || st->ab.active) {
+        if (cfg.emergency_reinforcement || may_have_ab) {
             run_emergency_recall_and_relief(w, ops, *st);
         }
-        if (cfg.naval_defense || cfg.siege_interception || st->ab.active) {
-            mobilize_city_waves(w, ops, *st, cfg.naval_defense || st->ab.active, cfg.siege_interception || st->ab.active);
+        if (cfg.naval_defense || cfg.siege_interception || may_have_ab) {
+            mobilize_city_waves(w, ops, *st, cfg.naval_defense || may_have_ab, cfg.siege_interception || may_have_ab);
         }
         return;
     }
 
-    if (phase == SAN14_TACTICAL_PHASE_POST_PLANNING && (cfg.siege_interception || st->ab.active)) {
+    if (phase == SAN14_TACTICAL_PHASE_POST_PLANNING && (cfg.siege_interception || may_have_ab)) {
         if (w->day != 1 && w->day != 11 && w->day != 21) return;
         const uint32_t turn_key = w->year * 10000u + w->month * 100u + w->day;
         if (st->last_siege_turn_key == turn_key) return;

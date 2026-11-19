@@ -542,6 +542,80 @@ void test_navaldef_and_shore_and_fu() {
     }
 }
 
+void test_host_ab_override_dispatch() {
+    // 1. Even with only bt_* enabled (legacy3 == 0 in user settings), Host AB_LEGACY & AB_FUSED
+    //    must dispatch both on_strategy_update (legacy recall) and on_daily_tactical_tick (new8)!
+    tac::State st;
+    st.set_config(all_new8_cfg());  // Note: legacy3 == 0, st.ab.active == false
+    auto policy = tac::make_policy(st);
+    MockBtEnv env;
+    auto ops = make_ops(env);
+
+    // Also verify parse_profile_spec("fused", NEW8) returns NEW8 | LEGACY3!
+    assert(tac::parse_profile_spec("fused", SAN14_TACTICAL_MOD_ALL_NEW8) ==
+           (SAN14_TACTICAL_MOD_ALL_NEW8 | SAN14_TACTICAL_MOD_ALL_LEGACY3));
+
+    env.ab_overrides[1] = {sizeof(San14TacticalForceAbOverride), 1, {}, SAN14_TACTICAL_AB_LEGACY, 0};
+    env.ab_overrides[2] = {sizeof(San14TacticalForceAbOverride), 1, {}, SAN14_TACTICAL_AB_FUSED, 0};
+    env.ab_overrides[3] = {sizeof(San14TacticalForceAbOverride), 1, {}, SAN14_TACTICAL_AB_VANILLA, 0};
+
+    std::vector<uint32_t> returned_slots;
+    ops.ops_context = &env;
+    // Hook return_unit via a small lambda-free static helper isn't needed if we test on_eval_candidate_reserve + on_strategy_update + on_daily_tactical_tick:
+    std::vector<San14TacticalDistrict> dists = {
+        {sizeof(San14TacticalDistrict), 1, 1, 3, 0, {}},
+        {sizeof(San14TacticalDistrict), 2, 2, 3, 0, {}},
+        {sizeof(San14TacticalDistrict), 3, 3, 3, 0, {}},
+    };
+    std::vector<San14TacticalCity> cities = {
+        {sizeof(San14TacticalCity), 1, 1, 1, 15000, 30000, 200000, 100, tile_at(10, 10), 100, 0, {}},
+        {sizeof(San14TacticalCity), 2, 2, 2, 15000, 30000, 200000, 100, tile_at(40, 40), 200, 0, {}},
+        {sizeof(San14TacticalCity), 3, 3, 3, 15000, 30000, 200000, 100, tile_at(80, 80), 300, 0, {}},
+    };
+    // Add enemy unit 99 threatening city 1 and enemy units 98/97 adjacent to Force 2's Yanxing 20 and Force 3's Yanxing 30.
+    std::vector<San14TacticalUnit> units = {
+        make_unit(20, 2, 201, 4000, tac::FORM_YANXING, tile_at(60, 60), tac::ACT_ATTACK_ARMY),
+        make_unit(98, 1, 101, 5000, tac::FORM_YULIN, tile_at(61, 60), tac::ACT_ATTACK_ARMY),
+        make_unit(30, 3, 301, 4000, tac::FORM_YANXING, tile_at(85, 85), tac::ACT_ATTACK_ARMY),
+        make_unit(97, 2, 202, 5000, tac::FORM_YULIN, tile_at(86, 85), tac::ACT_ATTACK_ARMY),
+        make_unit(99, 2, 203, 5000, tac::FORM_YULIN, tile_at(12, 10), tac::ACT_ATTACK_CITY),
+    };
+    std::vector<San14TacticalUnitExt> exts = {
+        make_ext(20, 20, 1, 0, 201),
+        make_ext(30, 30, 1, 0, 301),
+    };
+    env.live_units = &units;
+    env.live_exts = &exts;
+
+    San14TacticalWorld w{};
+    w.struct_size = sizeof(w);
+    w.year = 220; w.month = 1; w.day = 3;
+    w.districts = dists.data(); w.district_count = 3;
+    w.cities = cities.data(); w.city_count = 3;
+    w.units = units.data(); w.unit_count = static_cast<uint32_t>(units.size());
+    w.unit_exts = exts.data(); w.unit_ext_count = static_cast<uint32_t>(exts.size());
+
+    // Force 1 (AB_LEGACY) gets legacy reserve floor (15000) under threat while keeping current quota (10000),
+    // even though user config had legacy3 == 0!
+    int32_t nr = 0, nq = 0;
+    assert(policy.on_eval_candidate_reserve(policy.plugin_context, &w, &ops, 1, 5000, 10000, &nr, &nq) == SAN14_OK);
+    assert(nr == 15000 && nq == 10000);
+    // Force 2 (AB_FUSED) gets siegeplan 0.6x reserve (3000) + legacy wealth quota (30000 - 3000 = 27000)!
+    assert(policy.on_eval_candidate_reserve(policy.plugin_context, &w, &ops, 2, 5000, 10000, &nr, &nq) == SAN14_OK);
+    assert(nr == 3000 && nq == 27000);
+    // Force 3 (AB_VANILLA) returns UNSUPPORTED!
+    assert(policy.on_eval_candidate_reserve(policy.plugin_context, &w, &ops, 3, 5000, 10000, &nr, &nq) == SAN14_E_UNSUPPORTED);
+
+    // Even if user config is completely empty ({}), Host AB_FUSED must NOT early-return in on_daily_tactical_tick or on_strategy_update!
+    st.set_config({});
+    policy.on_strategy_update(policy.plugin_context, &w, &ops, SAN14_TACTICAL_PHASE_PLANNING);
+    policy.on_daily_tactical_tick(policy.plugin_context, &w, &ops);
+
+    // Force 2's Yanxing 20 (AB_FUSED) backed off from enemy 98; Force 3's Yanxing 30 (AB_VANILLA) stayed untouched!
+    assert(units[0].order_code == tac::ACT_MOVE && tac::hex_dist(units[0].target_id, units[1].tile_id) >= 2);
+    assert(units[2].order_code == tac::ACT_ATTACK_ARMY && units[2].target_id == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -550,6 +624,7 @@ int main() {
     test_retreat_and_gate_modules();
     test_walls_siegeplan_ab_and_telemetry();
     test_navaldef_and_shore_and_fu();
+    test_host_ab_override_dispatch();
     std::cout << "bt_tactical_modules_tests OK\n";
     return 0;
 }
