@@ -20,7 +20,7 @@ bool configured=false,edit_applied=false,merit_applied=false;
 bool traits_supported=false,traits_applied=false;
 std::array<bool,kCustomCount> supported{};
 Preferences defaults,current,draft,archive_defaults;
-bool draft_ready=false,preset_current_only=false;
+bool draft_ready=false;
 void update_pending(const std::string& message="");
 void update_value_marks();
 uint64_t revision=0;
@@ -178,7 +178,7 @@ San14Result sync(){
     }
     const bool values_changed=std::memcmp(&next,&current,sizeof(next))!=0;
     const auto applied=switched||values_changed?apply(next,true):SAN14_OK;if(applied!=SAN14_OK)return applied;
-    current=next;if(switched){preset_dialog.close();draft=next;draft_ready=true;preset_current_only=false;}revision=info.revision;playthrough=info.state==SAN14_STORAGE_READY?info.playthrough_id:"";sync_needed=false;
+    current=next;if(switched){preset_dialog.close();draft=next;draft_ready=true;}revision=info.revision;playthrough=info.state==SAN14_STORAGE_READY?info.playthrough_id:"";sync_needed=false;
     if(page){if(switched||values_changed){traits_editor.reset();stats_editor.reset();}update_rows();page->refresh();update_pending();}
     return SAN14_OK;
 }
@@ -210,9 +210,8 @@ bool saved_edit_supported(){
 }
 void update_pending(const std::string& message){
     if(!page)return;const auto count=PendingSettings(current,draft).count();
-    if(!count)preset_current_only=false;
     update_value_marks();
-    const auto pending=preset_current_only?u8" 项未保存变更。保存变更仅应用到当前档。":u8" 项未保存变更，尚未生效；返回将放弃。";
+    const auto pending=u8" 项未保存变更，尚未生效；返回将放弃。";
     page->footer_status(message.empty()?(count?std::string(u8"有 ")+std::to_string(count)+pending:u8"调整后点击保存变更；需同步其他已有存档时，选择保存变更到全部存档。") : message,count&&saved_edit_supported());
 }
 San14Result commit(const Preferences& next){
@@ -232,7 +231,6 @@ San14Result preview_preset(const Preferences& source){
     for(size_t i=0;i<kCustomCount;++i)if(supported[i]&&source.selected.has(i))next.values[i]=source.values[i];
     if(source.selected.has(SettingFields::edit))next.enhanced_edit=source.enhanced_edit;
     if(source.selected.has(SettingFields::merit))next.extended_merit=source.extended_merit;
-    preset_current_only=info.state==SAN14_STORAGE_READY;
     result=commit(next);if(result!=SAN14_OK)return result;
     update_rows();page->refresh();
     if(!PendingSettings(current,draft).count())update_pending(u8"这套设定与当前配置一致。");
@@ -262,12 +260,9 @@ San14Result save_pending(uint32_t target){
     San14SaveStorageInfo info{sizeof(info)};r=host->save_storage->context(host->host_context,&info);if(r!=SAN14_OK)return r;
     if(info.revision!=revision){update_pending(u8"存档已切换，请重新编辑。");return SAN14_E_STALE_GENERATION;}
     const bool current_file=info.state==SAN14_STORAGE_READY&&info.save_basename[0];
-    const bool current_only=false;
     const auto old_defaults=defaults;
-    const auto next_defaults=current_only?defaults:patch.merge(defaults);
-    if(!current_only){
-        r=write_preferences("global",next_defaults);if(r!=SAN14_OK){update_pending(u8"默认设置写入失败，变更仍未提交。");return r;}
-    }
+    const auto next_defaults=patch.merge(defaults);
+    r=write_preferences("global",next_defaults);if(r!=SAN14_OK){update_pending(u8"默认设置写入失败，变更仍未提交。");return r;}
     const auto next=patch.merge(current);
     EditTransform edit{patch,archive_defaults};San14SavedEditResult report{sizeof(report)};
     r=host->save_storage->edit_saved(host->host_context,target,info.revision,transform_saved,&edit,&report);
@@ -277,14 +272,14 @@ San14Result save_pending(uint32_t target){
     if(r==SAN14_E_NOT_FOUND&&target==SAN14_SAVED_EDIT_CURRENT&&!current_file)
         r=info.state==SAN14_STORAGE_READY?write_preferences("playthrough",next):SAN14_OK;
     if(r!=SAN14_OK){
-        const bool default_failed=!current_only&&write_preferences("global",old_defaults)!=SAN14_OK;
+        const bool default_failed=write_preferences("global",old_defaults)!=SAN14_OK;
         update_pending(report.rollback_failed||default_failed?u8"保存失败，部分数据未能回退，请保留附加文件备份并核对设置。":u8"保存失败，原有设置已保留，待提交变更仍在。请检查存档与附加文件。");return r;
     }
     defaults=next_defaults;
-    r=apply(next,true);current=next;draft=next;preset_current_only=false;
+    r=apply(next,true);current=next;draft=next;
     sync_needed=true;update_rows();page->refresh();
-    if(r!=SAN14_OK){update_pending(current_only||current_file||target==SAN14_SAVED_EDIT_ALL?u8"设置已保存，当前局应用失败，请重新读取存档。":u8"新局默认已保存，当前应用失败，请重新进入或读取存档。");return r;}
-    update_pending(current_only?u8"已应用到当前战局和存档（如有）。":target==SAN14_SAVED_EDIT_CURRENT?u8"已保存变更：当前存档（如有）及新局默认已更新，其他已有存档不变。":std::string(u8"已保存变更到 ")+std::to_string(report.matched_files)+u8" 个存档并应用，已更新新局默认。");return SAN14_OK;
+    if(r!=SAN14_OK){update_pending(current_file||target==SAN14_SAVED_EDIT_ALL?u8"设置已保存，当前局应用失败，请重新读取存档。":u8"新局默认已保存，当前应用失败，请重新进入或读取存档。");return r;}
+    update_pending(target==SAN14_SAVED_EDIT_CURRENT?u8"已保存变更：当前存档（如有）及新局默认已更新，其他已有存档不变。":std::string(u8"已保存变更到 ")+std::to_string(report.matched_files)+u8" 个存档并应用，已更新新局默认。");return SAN14_OK;
 }
 San14Result change_value(size_t index,int32_t value){
     if(index>=kCustomCount||!supported[index])return SAN14_E_UNSUPPORTED;
@@ -354,7 +349,7 @@ San14Result restore_tiers(size_t first,size_t count){
 San14Result SAN14_MOD_CALL open_page(void*){
     if(!active)return SAN14_E_BUSY;
     auto r=sync();if(r!=SAN14_OK)return r;
-    close_dropdown();preset_dialog.close();traits_editor.reset();stats_editor.reset();if(page)page->close();draft=current;preset_current_only=false;
+    close_dropdown();preset_dialog.close();traits_editor.reset();stats_editor.reset();if(page)page->close();draft=current;
     try{
         page=std::make_unique<san14::ExpertPage>(host,u8"增强设定与编辑");
         page->set_footer_actions({{u8"保存变更",[]{return save_pending(SAN14_SAVED_EDIT_CURRENT);}},
