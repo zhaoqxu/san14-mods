@@ -143,6 +143,11 @@ typedef struct San14HostApi {
     const San14NavigationApi* navigation;
     const San14UiLogApi* ui_log;
     const San14OfficerEditApi* officer_edit;
+    /* Fixed optional slots for independently built adapters. Unavailable services are null. */
+    const struct San14BattlefieldApi* battlefield;
+    const struct San14RosterViewApi* roster_view;
+    const struct San14TerritoryTabsApi* territory_tabs;
+    const struct San14MatchApi* match;
 } San14HostApi;
 
 #endif
