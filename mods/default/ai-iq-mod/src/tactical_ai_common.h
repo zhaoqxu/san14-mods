@@ -163,7 +163,23 @@ struct PolicyParams {
     uint32_t gate_max_archers = 3;
     int32_t gate_walk_steps = 14;
     int32_t gate_reach_steps = 16;
+
+    // Phase 2 (v2/v3) semantic tuning parameters (pure map/troops/ability semantics)
+    int32_t v2_deploy_min_main_share = 6000;
+    int32_t v2_retreat_safe_dist = 9;
+    int32_t v2_retreat_home_zone_dist = 12;
+    int32_t v2_retreat_home_area_ratio_pct = 175;
+    int32_t v2_retreat_home_zone_ratio_pct = 175;
+    int32_t v3_retreat_deep_ratio_pct = 145;
+    int32_t v2_walls_engine_radius = 5;
+    int32_t v2_walls_city_radius = 5;
+    int32_t v2_walls_min_troops = 1000;
+    int32_t v2_siege_fu_max_pct = 118;
+    int32_t v2_siege_counter_discount_pct = 82;
 };
+
+// Internal policy-only profile flag (kept outside public SDK ABI bitmask).
+constexpr uint32_t MOD_INTERNAL_V1_RAW = (1u << 31);
 
 struct Config {
     bool naval_defense = false;
@@ -232,9 +248,11 @@ inline uint32_t parse_profile_spec(const std::string& spec, uint32_t base_mask) 
         return base_mask ? base_mask : (SAN14_TACTICAL_MOD_ALL_NEW8 | SAN14_TACTICAL_MOD_ALL_LEGACY3);
     }
     if (spec == "fused" || spec == "all") return SAN14_TACTICAL_MOD_ALL_NEW8 | SAN14_TACTICAL_MOD_ALL_LEGACY3;
+    if (spec == "raw_fused") return SAN14_TACTICAL_MOD_ALL_NEW8 | SAN14_TACTICAL_MOD_ALL_LEGACY3 | MOD_INTERNAL_V1_RAW;
     if (spec == "vanilla" || spec == "off" || spec == "none" || spec == "0") return 0u;
     if (spec == "legacy") return SAN14_TACTICAL_MOD_ALL_LEGACY3;
     if (spec == "new8") return SAN14_TACTICAL_MOD_ALL_NEW8;
+    if (spec == "raw8") return SAN14_TACTICAL_MOD_ALL_NEW8 | MOD_INTERNAL_V1_RAW;
     if (spec.rfind("0x", 0) == 0 || spec.rfind("0X", 0) == 0) {
         return static_cast<uint32_t>(std::strtoul(spec.c_str(), nullptr, 16));
     }
@@ -258,6 +276,7 @@ inline uint32_t parse_profile_spec(const std::string& spec, uint32_t base_mask) 
         else if (tok == "legacy_siege_int") m |= SAN14_TACTICAL_MOD_LEGACY_SIEGE_INT;
         else if (tok == "new8") m |= SAN14_TACTICAL_MOD_ALL_NEW8;
         else if (tok == "legacy") m |= SAN14_TACTICAL_MOD_ALL_LEGACY3;
+        else if (tok == "v1raw") m |= MOD_INTERNAL_V1_RAW;
         i = j + 1;
     }
     return m;
@@ -443,7 +462,9 @@ struct DeployWaveMem {
     uint32_t date_key = 0;
     uint32_t target_foothold = 0;
     int32_t share_troops = 0;
+    uint32_t effective_mains = 0;
     bool flank_assigned = false;
+    bool yanxing_assigned = false;
 };
 
 struct ActiveAssignment {
@@ -467,7 +488,7 @@ struct State {
     uint32_t last_daily_date_key = 0;
     int32_t last_retreat_turn_day = -1;
 
-    std::unordered_map<uint32_t, uint32_t> city_cooldown_ms;
+    std::unordered_map<uint32_t, int32_t> city_cooldown_day;
     std::unordered_map<uint32_t, ActiveAssignment> assignments;
     std::unordered_map<uint32_t, uint32_t> district_force_cache;
 
@@ -527,7 +548,7 @@ struct State {
         last_siege_turn_key = 0;
         last_daily_date_key = 0;
         last_retreat_turn_day = -1;
-        city_cooldown_ms.clear();
+        city_cooldown_day.clear();
         assignments.clear();
         district_force_cache.clear();
         order_mem.clear();
@@ -848,6 +869,15 @@ inline bool force_has_module(
     uint32_t module_bit
 ) {
     return (effective_mask_for_force(st, w, ops, force_id) & module_bit) != 0;
+}
+
+inline bool force_is_v1_raw(
+    const State& st,
+    const San14TacticalWorld* w,
+    const San14TacticalHostOps* ops,
+    uint32_t force_id
+) {
+    return (effective_mask_for_force(st, w, ops, force_id) & MOD_INTERNAL_V1_RAW) != 0;
 }
 
 inline bool issue_unit_order(

@@ -35,6 +35,7 @@ struct MockBtEnv {
     std::unordered_map<uint32_t, San14TacticalForceAbOverride> ab_overrides;
     std::vector<RouteCmd> route_cmds;
     std::vector<TroopsCmd> troops_cmds;
+    std::vector<San14TacticalDeployRequest> deploys;
     std::vector<San14TacticalUnit>* live_units = nullptr;
     std::vector<San14TacticalUnitExt>* live_exts = nullptr;
 };
@@ -131,6 +132,30 @@ San14Result SAN14_MOD_CALL mock_get_ab(void* ctx, uint32_t force_id, San14Tactic
     return SAN14_OK;
 }
 
+San14Result SAN14_MOD_CALL mock_list_city_officers(
+    void* ctx, uint32_t, San14TacticalOfficer* out_officers, uint32_t capacity, uint32_t* out_count
+) {
+    auto* env = static_cast<MockBtEnv*>(ctx);
+    uint32_t n = 0;
+    for (const auto& kv : env->officers) {
+        if (n < capacity) out_officers[n] = kv.second;
+        ++n;
+    }
+    if (out_count) *out_count = n;
+    return SAN14_OK;
+}
+
+San14Result SAN14_MOD_CALL mock_deploy_unit(
+    void* ctx, const San14TacticalDeployRequest* req, San14TacticalDeployResult* out_result
+) {
+    auto* env = static_cast<MockBtEnv*>(ctx);
+    if (!req || !out_result) return SAN14_E_INVALID_ARGUMENT;
+    env->deploys.push_back(*req);
+    out_result->unit_slot = 500u + static_cast<uint32_t>(env->deploys.size());
+    out_result->deployed_troops = req->troops;
+    return SAN14_OK;
+}
+
 San14TacticalHostOps make_ops(MockBtEnv& env) {
     San14TacticalHostOps ops{};
     ops.struct_size = sizeof(ops);
@@ -138,6 +163,8 @@ San14TacticalHostOps make_ops(MockBtEnv& env) {
     ops.get_tile = &mock_get_tile;
     ops.hex_distance = &mock_hex_dist;
     ops.get_officer = &mock_get_officer;
+    ops.list_city_officers = &mock_list_city_officers;
+    ops.deploy_unit = &mock_deploy_unit;
     ops.is_enemy_force = &mock_enemy;
     ops.set_unit_route = &mock_set_route;
     ops.eval_area_bonus = &mock_eval_area_bonus;
@@ -195,9 +222,9 @@ void test_deploy_module() {
     st.set_config(all_new8_cfg());
     auto policy = tac::make_policy(st);
     MockBtEnv env;
-    env.officers[1] = {sizeof(San14TacticalOfficer), 1, 1, 1, 100, 100, 85, 80, 70, (1u << 1) | (1u << 2), 11, 12000, {}, 0, 0, 0, 0};
-    env.officers[2] = {sizeof(San14TacticalOfficer), 2, 1, 1, 100, 100, 70, 70, 60, (1u << 1) | (1u << 2), 11, 10000, {}, 0, 0, 0, 0};
-    env.officers[3] = {sizeof(San14TacticalOfficer), 3, 1, 1, 100, 100, 65, 65, 50, (1u << 1), 11, 9000, {}, 0, 0, 0, 0};
+    env.officers[1] = {sizeof(San14TacticalOfficer), 1, 1, 1, 100, 100, 85, 85, 55, (1u << 1) | (1u << 2), 11, 12000, {}, 0, 0, 0, 0};
+    env.officers[2] = {sizeof(San14TacticalOfficer), 2, 1, 1, 100, 100, 75, 55, 86, (1u << 1) | (1u << 2) | (1u << 3), 11, 10000, {}, 0, 0, 0, 0};
+    env.officers[3] = {sizeof(San14TacticalOfficer), 3, 1, 1, 100, 100, 70, 70, 50, (1u << 1) | (1u << 2), 11, 9000, {}, 0, 0, 0, 0};
     env.officers[4] = {sizeof(San14TacticalOfficer), 4, 1, 1, 100, 100, 45, 45, 40, (1u << 1) | (1u << 3), 11, 6000, {}, 0, 0, 0, 0};
     const uint32_t cands[4] = {1, 2, 3, 4};
 
@@ -206,17 +233,50 @@ void test_deploy_module() {
     w.districts = &dist; w.district_count = 1;
     auto ops = make_ops(env);
 
-    San14TacticalInterceptDeployContext ctx{sizeof(ctx), 1, 1, 1, 0, 1, 1, 11, 9000, 12000, 9000, 0, 99, cands, 4};
+    // 1. v4.1: strong generals keep full native troops & melee frontline (never turned into fragile Yanxing at 8000 troops, no skip_deploy!),
+    //    pure low-strength strategist (str<55, int>=80, troops<=4000) gets Yanxing, 3rd strong officer gets Fengshi flank!
+    San14TacticalForceTelemetry tel_before{sizeof(tel_before)}, tel_after{sizeof(tel_after)};
+    assert(policy.on_query_telemetry(policy.plugin_context, 1, &tel_before) == SAN14_OK);
+    San14TacticalInterceptDeployContext ctx{sizeof(ctx), 1, 1, 1, 0, 1, 1, 11, 10000, 12000, 12000, 0, 99, cands, 4};
     San14TacticalInterceptDeployDecision dec{sizeof(dec)};
+    assert(policy.on_eval_intercept_deploy(policy.plugin_context, &w, &ops, &ctx, &dec) == SAN14_OK);
+    assert(dec.skip_deploy == 0 && dec.override_troops == 0 && dec.override_formation_id == 0);
+    assert(policy.on_query_telemetry(policy.plugin_context, 1, &tel_after) == SAN14_OK);
+    assert(tel_after.deploy_overrides == tel_before.deploy_overrides);
+
+    // High-troop strong officer (8000 troops, str=55) stays melee frontline (NOT forced into Yanxing!).
+    ctx.officer_id = 2; ctx.sent_count = 1; ctx.max_troops = 10000; ctx.troops = 8000;
+    assert(policy.on_eval_intercept_deploy(policy.plugin_context, &w, &ops, &ctx, &dec) == SAN14_OK);
+    assert(dec.skip_deploy == 0 && dec.override_troops == 0 && dec.override_formation_id == 0);
+
+    // Pure low-strength strategist (str=45, int=86, troops=2800 <= 3000) gets Yanxing support!
+    env.officers[2].strength = 45;
+    ctx.troops = 2800;
+    assert(policy.on_eval_intercept_deploy(policy.plugin_context, &w, &ops, &ctx, &dec) == SAN14_OK);
+    assert(dec.skip_deploy == 0 && dec.override_troops == 0 && dec.override_formation_id == tac::FORM_YANXING);
+    env.officers[2].strength = 55;
+
+    // 3rd strong officer gets Fengshi flank with full troops (never skipped!).
+    ctx.officer_id = 3; ctx.sent_count = 2; ctx.max_troops = 9000; ctx.troops = 7000;
+    assert(policy.on_eval_intercept_deploy(policy.plugin_context, &w, &ops, &ctx, &dec) == SAN14_OK);
+    assert(dec.skip_deploy == 0 && dec.override_troops == 0 && dec.override_formation_id == tac::FORM_FENGSHI);
+
+    // Weak officer (< 60) gets cheerleader cap (2000) + Yanxing.
+    ctx.officer_id = 4; ctx.sent_count = 3; ctx.max_troops = 6000; ctx.troops = 5000;
+    assert(policy.on_eval_intercept_deploy(policy.plugin_context, &w, &ops, &ctx, &dec) == SAN14_OK);
+    assert(dec.skip_deploy == 0 && dec.override_troops == 2000 && dec.override_formation_id == tac::FORM_YANXING);
+
+    // 2. raw8 A/B profile reproduces original 3-way split (3000) + cheerleader cap (2000).
+    env.ab_overrides[1] = {sizeof(San14TacticalForceAbOverride), 1, {}, SAN14_TACTICAL_AB_CUSTOM_MASK, tac::parse_profile_spec("raw8", 0)};
+    dist.remaining_commands = 5;
+    ctx = {sizeof(ctx), 1, 1, 1, 0, 1, 1, 11, 9000, 12000, 9000, 0, 97, cands, 4};
     assert(policy.on_eval_intercept_deploy(policy.plugin_context, &w, &ops, &ctx, &dec) == SAN14_OK);
     assert(dec.skip_deploy == 0 && dec.override_troops == 3000 && dec.override_formation_id == 0);
 
-    // 2nd strong officer gets flank Fengshi (2) and share 3000.
-    ctx.officer_id = 2; ctx.sent_count = 1; ctx.max_troops = 10000; ctx.troops = 6000;
+    ctx.officer_id = 3; ctx.sent_count = 1; ctx.max_troops = 9000; ctx.troops = 6000;
     assert(policy.on_eval_intercept_deploy(policy.plugin_context, &w, &ops, &ctx, &dec) == SAN14_OK);
     assert(dec.override_troops == 3000 && dec.override_formation_id == tac::FORM_FENGSHI);
 
-    // Weak officer (< 60 leadership) capped at 2000 and switched to Yanxing (3).
     ctx.officer_id = 4; ctx.sent_count = 3; ctx.max_troops = 6000; ctx.troops = 5000;
     assert(policy.on_eval_intercept_deploy(policy.plugin_context, &w, &ops, &ctx, &dec) == SAN14_OK);
     assert(dec.override_troops == 2000 && dec.override_formation_id == tac::FORM_YANXING);
@@ -398,11 +458,16 @@ void test_walls_siegeplan_ab_and_telemetry() {
     w.cities = cities.data(); w.city_count = 3;
     w.units = units.data(); w.unit_count = 1;
 
-    // 1. Force 1 (FUSED) evaluates target city 2: uses siegefu + 80% relief of (15000-5000)=8000 (not double-counted!).
+    // 1. Force 1 (FUSED v2) sees counter-attack window (30000 vs 12000+0 local): discounts target strength (0.82x = 8200 + 4000 halved relief = 12200).
     int32_t corrected = 0;
     assert(policy.on_eval_target_strength(policy.plugin_context, &w, &ops, 1, 2, 10000, 5000, &corrected) == SAN14_OK);
-    // md=1.3 -> mdF=1+0.77*0.3=1.231, maF=1+0.2*0.3=1.06 -> ratio=1.231/1.06=1.1613 -> 11613 + 8000 = 19613.
+    assert(corrected == 12200);
+
+    // Check raw_fused preserves original v1 (19613).
+    env.ab_overrides[1] = {sizeof(San14TacticalForceAbOverride), 1, {}, SAN14_TACTICAL_AB_CUSTOM_MASK, tac::parse_profile_spec("raw_fused", 0)};
+    assert(policy.on_eval_target_strength(policy.plugin_context, &w, &ops, 1, 2, 10000, 5000, &corrected) == SAN14_OK);
     assert(corrected > 19000 && corrected < 20500);
+    env.ab_overrides[1] = {sizeof(San14TacticalForceAbOverride), 1, {}, SAN14_TACTICAL_AB_FUSED, 0};
 
     // Force 2 (VANILLA) stays UNSUPPORTED!
     assert(policy.on_eval_target_strength(policy.plugin_context, &w, &ops, 2, 1, 10000, 5000, &corrected) == SAN14_E_UNSUPPORTED);
@@ -411,14 +476,17 @@ void test_walls_siegeplan_ab_and_telemetry() {
     int32_t nr = 0, nq = 0;
     assert(policy.on_eval_candidate_reserve(policy.plugin_context, &w, &ops, 1, 8000, 10000, &nr, &nq) == SAN14_OK);
     assert(nr == 15000);
-    // Without threat, Force 1 scales 10000 -> 6000 (0.6x).
-    units[0].tile_id = tile_at(40, 40);
+    // Without close threat (unit 10 at dist 8 with counter window open, or far away), Force 1 scales 10000 -> 6000 (0.6x).
+    units[0].tile_id = tile_at(18, 10);
     assert(policy.on_eval_candidate_reserve(policy.plugin_context, &w, &ops, 1, 10000, 10000, &nr, &nq) == SAN14_OK);
-    assert(nr == 6000);
+    assert(nr == 6000 && nq == 24000);
 
-    // 3. Command rollback: Force 1 skips (siegeenough), Force 2 is UNSUPPORTED.
+    // 3. Command rollback: Force 1 counter-attack window open -> allow (fskip == 0); when city troops low (9000) -> skip (fskip == 1); Force 2 UNSUPPORTED.
     int32_t fskip = 0;
+    assert(policy.on_eval_command_rollback_ex(policy.plugin_context, &w, &ops, 1, 1, 0, &fskip) == SAN14_OK && fskip == 0);
+    cities[0].troops = 9000;
     assert(policy.on_eval_command_rollback_ex(policy.plugin_context, &w, &ops, 1, 1, 0, &fskip) == SAN14_OK && fskip == 1);
+    cities[0].troops = 30000;
     assert(policy.on_eval_command_rollback_ex(policy.plugin_context, &w, &ops, 2, 2, 0, &fskip) == SAN14_E_UNSUPPORTED);
 
     // 4. Intercept gate: Force 1 unlocks native block when enemy lead <= 3 hexes from city 1, halves water.
@@ -616,6 +684,131 @@ void test_host_ab_override_dispatch() {
     assert(units[2].order_code == tac::ACT_ATTACK_ARMY && units[2].target_id == 0);
 }
 
+void test_v2_retreat_and_walls_improvements() {
+    tac::State st;
+    auto cfg = all_new8_cfg();
+    cfg.siege_interception = true;
+    cfg.emergency_reinforcement = true;
+    st.set_config(cfg);
+    auto policy = tac::make_policy(st);
+    MockBtEnv env;
+    auto ops = make_ops(env);
+    env.officers[1] = {sizeof(San14TacticalOfficer), 1, 1, 1, 100, 100, 85, 85, 70, (1u << 1), 11, 10000, {}, 0, 0, 0, 0};
+
+    std::vector<San14TacticalDistrict> dists = {
+        {sizeof(San14TacticalDistrict), 1, 1, 4, 0, {}},
+    };
+    std::vector<San14TacticalCity> cities = {
+        {sizeof(San14TacticalCity), 1, 1, 1, 5000, 9000, 100000, 100, tile_at(10, 10), 100, 0, {}},
+        {sizeof(San14TacticalCity), 2, 2, 2, 5000, 15000, 100000, 100, tile_at(40, 10), 200, 0, {}},
+    };
+    // Friendly tile/area at (16,10) (6 hexes from city 1).
+    env.tiles[tile_at(16, 10)] = {sizeof(San14TacticalTile), tile_at(16, 10), 1, 1, 10, 1, 1, 0, 0, {}};
+    std::vector<San14TacticalArea> areas = {
+        {sizeof(San14TacticalArea), 10, 1, tile_at(15, 10), 1, 10, 10, {}, 0, {}},
+    };
+
+    // Unit 1 (4000) stands 6 hexes from home city on friendly area, facing 9000 enemies at dist 2 (normally 9000 > 1.3*4000!).
+    // With v2 home garrison + area threshold (175%), Unit 1 does NOT retreat!
+    // Unit 2 (2500) near walls (dist 2 from city 1) intercepts enemy Chongche engine 11 (4000) at dist 3 from city 1 despite outnumbered!
+    std::vector<San14TacticalUnit> units = {
+        make_unit(1, 1, 101, 4000, tac::FORM_YULIN, tile_at(16, 10), tac::ACT_MOVE),
+        make_unit(2, 1, 102, 2500, tac::FORM_YULIN, tile_at(11, 11), tac::ACT_MOVE),
+        make_unit(10, 2, 201, 9000, tac::FORM_YULIN, tile_at(18, 10), tac::ACT_MOVE),
+        make_unit(11, 2, 202, 4000, tac::FORM_CHONGCHE, tile_at(12, 12), tac::ACT_ATTACK_CITY),
+    };
+    std::vector<San14TacticalUnitExt> exts = {
+        make_ext(1, 1, 1, 0, 101, 4000.0f),
+        make_ext(2, 2, 1, 0, 102, 2500.0f),
+    };
+    env.live_units = &units;
+    env.live_exts = &exts;
+
+    San14TacticalWorld w{};
+    w.struct_size = sizeof(w);
+    w.year = 220; w.month = 1; w.day = 1;
+    w.districts = dists.data(); w.district_count = 1;
+    w.cities = cities.data(); w.city_count = 2;
+    w.areas = areas.data(); w.area_count = 1;
+    w.units = units.data(); w.unit_count = static_cast<uint32_t>(units.size());
+    w.unit_exts = exts.data(); w.unit_ext_count = static_cast<uint32_t>(exts.size());
+
+    policy.on_daily_tactical_tick(policy.plugin_context, &w, &ops);
+    assert(env.troops_cmds.empty());  // Did NOT cascade retreat on home area!
+    assert(units[1].order_code == tac::ACT_ATTACK_ARMY && units[1].target_id == 11);  // Intercepted enemy siege engine!
+
+    // Also verify mobilize_city_waves unblocks close siege engine sortie when city troops < 15000 (9000 > 5000 reserve).
+    assert(policy.on_strategy_update != nullptr);
+    policy.on_strategy_update(policy.plugin_context, &w, &ops, SAN14_TACTICAL_PHASE_PLANNING);
+    assert(!env.deploys.empty());
+
+    // Game-day cooldown: same day (day 1) and day 11 (< 12 days) do not re-deploy; day 21 (>= 12 days) allows next wave!
+    const size_t n1 = env.deploys.size();
+    policy.on_strategy_update(policy.plugin_context, &w, &ops, SAN14_TACTICAL_PHASE_PLANNING);
+    assert(env.deploys.size() == n1);
+    w.day = 11;
+    policy.on_strategy_update(policy.plugin_context, &w, &ops, SAN14_TACTICAL_PHASE_PLANNING);
+    assert(env.deploys.size() == n1);
+    w.day = 21;
+    policy.on_strategy_update(policy.plugin_context, &w, &ops, SAN14_TACTICAL_PHASE_PLANNING);
+    assert(env.deploys.size() > n1);
+}
+
+void test_v3_retreat_lock_and_no_unilateral_siege_override() {
+    tac::State st;
+    tac::Config cfg{};
+    cfg.bt_siegeplan = true;
+    cfg.bt_retreat = true;
+    cfg.bt_engage = true;
+    st.set_config(cfg);
+    auto policy = tac::make_policy(st);
+    MockBtEnv env;
+    auto ops = make_ops(env);
+
+    env.officers[1] = {sizeof(San14TacticalOfficer), 1, 1, 1, 100, 100, 92, 88, 70, (1u << 1) | (1u << 4), 11, 12000, {}, 0, 0, 0, 0};
+
+    std::vector<San14TacticalDistrict> dists = {
+        {sizeof(San14TacticalDistrict), 1, 1, 5, 0, {}},
+        {sizeof(San14TacticalDistrict), 2, 2, 5, 0, {}},
+    };
+    std::vector<San14TacticalCity> cities = {
+        {sizeof(San14TacticalCity), 1, 1, 1, 5000, 32000, 160000, 100, tile_at(10, 10), 100, 0, {}},
+        {sizeof(San14TacticalCity), 2, 2, 2, 5000, 10000, 100000, 100, tile_at(24, 10), 200, 0, {}},
+    };
+    // Unit 1 at dist 8 from home city 1 facing massive enemy (30000) -> MUST NOT retreat inside home_dist <= 9!
+    std::vector<San14TacticalUnit> units = {
+        make_unit(1, 1, 101, 4000, tac::FORM_YULIN, tile_at(18, 12), tac::ACT_MOVE),
+        make_unit(10, 2, 201, 30000, tac::FORM_YULIN, tile_at(20, 12), tac::ACT_MOVE),
+    };
+    std::vector<San14TacticalUnitExt> exts = {
+        make_ext(1, 1, 1, 0, 101, 4000.0f),
+    };
+    env.live_units = &units;
+    env.live_exts = &exts;
+
+    San14TacticalWorld w{};
+    w.struct_size = sizeof(w);
+    w.year = 220; w.month = 1; w.day = 1;
+    w.districts = dists.data(); w.district_count = 2;
+    w.cities = cities.data(); w.city_count = 2;
+    w.units = units.data(); w.unit_count = 2;
+    w.unit_exts = exts.data(); w.unit_ext_count = 1;
+
+    policy.on_daily_tactical_tick(policy.plugin_context, &w, &ops);
+    assert(env.troops_cmds.empty());
+
+    // General-AI boundary: bt_siegeplan NEVER unilaterally spawns offensive marches bypassing native strategic targeting!
+    w.unit_count = 0;
+    policy.on_strategy_update(policy.plugin_context, &w, &ops, SAN14_TACTICAL_PHASE_PLANNING);
+    policy.on_strategy_update(policy.plugin_context, &w, &ops, SAN14_TACTICAL_PHASE_POST_PLANNING);
+    assert(env.deploys.empty());
+
+    // Only when native BT evaluates target strength itself does bt_siegeplan provide tactical evaluation.
+    int32_t corrected = 0;
+    assert(policy.on_eval_target_strength(policy.plugin_context, &w, &ops, 1, 2, 10000, 5000, &corrected) == SAN14_OK);
+    assert(corrected == 8200);
+}
+
 }  // namespace
 
 int main() {
@@ -625,6 +818,8 @@ int main() {
     test_walls_siegeplan_ab_and_telemetry();
     test_navaldef_and_shore_and_fu();
     test_host_ab_override_dispatch();
+    test_v2_retreat_and_walls_improvements();
+    test_v3_retreat_lock_and_no_unilateral_siege_override();
     std::cout << "bt_tactical_modules_tests OK\n";
     return 0;
 }

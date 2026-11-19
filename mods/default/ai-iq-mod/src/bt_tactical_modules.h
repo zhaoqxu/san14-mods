@@ -90,6 +90,10 @@ struct DailyContext {
         return (mask_of(force_id) & mod_bit) != 0;
     }
 
+    bool is_v1_raw(uint32_t force_id) {
+        return (mask_of(force_id) & MOD_INTERNAL_V1_RAW) != 0;
+    }
+
     bool is_enemy(uint32_t a, uint32_t b) const {
         return is_enemy_force(w, ops, a, b);
     }
@@ -434,16 +438,34 @@ inline void run_day_defend(DailyContext& ctx) {
         OrderMem* m = track_unit(ctx, a);
         if (!is_mine(m, OWNER_DEFEND)) continue;
 
+        const bool raw = ctx.is_v1_raw(a.u->force_id);
         int32_t target_idx = -1;
-        const bool going_home_city =
+        uint32_t defend_city_id = 0;
+        const bool explicit_home =
             (m->p_act == ACT_GO_CITY || m->p_act == ACT_ENTER_CITY) &&
             m->p_type == TT_CITY && m->p_id > 0 &&
             ctx.foothold_force(static_cast<uint32_t>(m->p_id)) == a.u->force_id;
+        if (explicit_home) {
+            defend_city_id = static_cast<uint32_t>(m->p_id);
+        } else if (!raw && a.troops_purpose == 0) {
+            const uint32_t hc = ctx.unit_home_city_id(a);
+            const uint32_t htile = ctx.foothold_tile(hc);
+            if (htile <= MAX_TILE_ID && hex_dist(a.u->tile_id, htile) <= p.v2_walls_city_radius) {
+                defend_city_id = hc;
+            }
+        }
+        const bool going_home_city = (defend_city_id != 0);
 
         if (going_home_city) {
-            const uint32_t ch = ctx.foothold_tile(static_cast<uint32_t>(m->p_id));
+            const uint32_t ch = ctx.foothold_tile(defend_city_id);
             if (ch <= MAX_TILE_ID) {
                 int32_t foes = 0, ours = 0;
+                if (!raw) {
+                    auto cit = ctx.city_by_id.find(defend_city_id);
+                    if (cit != ctx.city_by_id.end() && cit->second->troops > 2000) {
+                        ours += cit->second->troops / 3;
+                    }
+                }
                 int32_t eng_idx = -1, closest_idx = -1;
                 int32_t eng_d = 999, closest_d = 999;
                 for (size_t j = 0; j < ctx.units.size(); ++j) {
@@ -459,30 +481,55 @@ inline void run_day_defend(DailyContext& ctx) {
                     if (e.is_engine && d < eng_d) { eng_d = d; eng_idx = static_cast<int32_t>(j); }
                     if (d < closest_d) { closest_d = d; closest_idx = static_cast<int32_t>(j); }
                 }
-                if (foes > 0 && a.u->troops >= p.walls_defend_min_troops &&
+                const int32_t min_tr = raw ? p.walls_defend_min_troops : p.v2_walls_min_troops;
+                if (foes > 0 && a.u->troops >= min_tr &&
                     ours * 100 >= foes * p.walls_defend_odds_pct) {
                     target_idx = (eng_idx >= 0) ? eng_idx : closest_idx;
                 }
             }
-        } else if (is_field_order(m->p_act) && nearest_enemy_dist(ctx, a.u->tile_id, a.u->force_id) > 1) {
-            int32_t best_d = 999;
-            for (size_t j = 0; j < ctx.units.size(); ++j) {
-                const auto& e = ctx.units[j];
-                if (!e.is_engine || !ctx.is_enemy(a.u->force_id, e.u->force_id)) continue;
-                const int32_t d = hex_dist(a.u->tile_id, e.u->tile_id);
-                if (d > p.walls_defend_engine_radius || d >= best_d) continue;
-                int32_t ours = 0, theirs = 0;
-                for (const auto& z : ctx.units) {
-                    const int32_t dz = hex_dist(z.u->tile_id, e.u->tile_id);
-                    if (z.u->force_id == a.u->force_id) {
-                        if (dz <= 3) ours += z.u->troops;
-                    } else if (dz <= 2 && !z.is_ship && ctx.is_enemy(a.u->force_id, z.u->force_id)) {
-                        theirs += z.u->troops;
-                    }
+        } else if (is_field_order(m->p_act)) {
+            const int32_t dn = nearest_enemy_dist(ctx, a.u->tile_id, a.u->force_id);
+            bool already_hitting_engine = false;
+            if (!raw && m->p_act == ACT_ATTACK_ARMY && m->p_type == TT_ARMY && m->p_id > 0) {
+                auto sit = ctx.slot_to_idx.find(static_cast<uint32_t>(m->p_id));
+                if (sit != ctx.slot_to_idx.end() && ctx.units[sit->second].is_engine) {
+                    already_hitting_engine = true;
                 }
-                if (ours >= theirs) {
-                    best_d = d;
-                    target_idx = static_cast<int32_t>(j);
+            }
+            const int32_t scan_r = raw ? p.walls_defend_engine_radius : p.v2_walls_engine_radius;
+            if (!already_hitting_engine && (dn > 1 || !raw)) {
+                int32_t best_d = 999;
+                for (size_t j = 0; j < ctx.units.size(); ++j) {
+                    const auto& e = ctx.units[j];
+                    if (!e.is_engine || !ctx.is_enemy(a.u->force_id, e.u->force_id)) continue;
+                    const int32_t d = hex_dist(a.u->tile_id, e.u->tile_id);
+                    if (d > scan_r || d >= best_d) continue;
+                    if (dn <= 1 && d > 2) continue;
+                    int32_t ours = 0, theirs = 0;
+                    for (const auto& z : ctx.units) {
+                        const int32_t dz = hex_dist(z.u->tile_id, e.u->tile_id);
+                        if (z.u->force_id == a.u->force_id) {
+                            if (dz <= (raw ? 3 : 4)) ours += z.u->troops;
+                        } else if (dz <= 2 && !z.is_ship && ctx.is_enemy(a.u->force_id, z.u->force_id)) {
+                            theirs += z.u->troops;
+                        }
+                    }
+                    if (!raw) {
+                        for (const auto& ckv : ctx.city_by_id) {
+                            const auto* fc = ckv.second;
+                            if (fc->force_id == a.u->force_id && fc->troops > 2000 &&
+                                hex_dist(fc->tile_id, e.u->tile_id) <= 4) {
+                                ours += fc->troops / 3;
+                            }
+                        }
+                    }
+                    const bool ok = raw
+                        ? (ours >= theirs)
+                        : (ours * 100 >= theirs * p.walls_defend_odds_pct || theirs <= e.u->troops + 1500);
+                    if (ok) {
+                        best_d = d;
+                        target_idx = static_cast<int32_t>(j);
+                    }
                 }
             }
         }
@@ -1571,9 +1618,22 @@ inline void run_day_engage(DailyContext& ctx) {
             OrderMem* m = track_unit(ctx, a);
             if (!is_mine(m, OWNER_TARGET) || a.u->task_locked != 0) continue;
 
-            const bool multi = (a.troops_id > 0 && ctx.troops_count[a.troops_id] >= 2);
+            const bool raw = ctx.is_v1_raw(f);
+            bool multi = (a.troops_id > 0 && ctx.troops_count[a.troops_id] >= 2);
+            bool fighting = is_fighting_task(a.troops_purpose);
+            if (!raw && a.troops_id == 0 &&
+                (m->p_act == ACT_ATTACK_ARMY || m->p_act == ACT_ATTACK_CITY || m->p_act == ACT_MOVE)) {
+                fighting = true;
+                for (const auto& fr : ctx.units) {
+                    if (fr.u->force_id == f && fr.u->slot != a.u->slot && !fr.is_ship &&
+                        hex_dist(fr.u->tile_id, a.u->tile_id) <= 5) {
+                        multi = true;
+                        break;
+                    }
+                }
+            }
             const bool waiting = (m->p_act == ACT_WAIT);
-            bool ok = a.is_melee && (multi || waiting) && is_fighting_task(a.troops_purpose);
+            bool ok = a.is_melee && (multi || waiting) && fighting;
             int32_t dn = 999;
             if (ok) {
                 for (const auto& e : ctx.units) {
@@ -1584,7 +1644,8 @@ inline void run_day_engage(DailyContext& ctx) {
             }
             const uint8_t t = (dn <= 1) ? 1 : 0;
             ok = ok && dn <= p.engage_radius &&
-                 ((multi && (m->p_act == ACT_ATTACK_ARMY || (t && (m->p_act == ACT_MOVE || m->p_act == ACT_MARCH_ALT)))) ||
+                 ((multi && (m->p_act == ACT_ATTACK_ARMY ||
+                             (t && (m->p_act == ACT_MOVE || m->p_act == ACT_MARCH_ALT || (!raw && m->p_act == ACT_ATTACK_CITY))))) ||
                   (t && waiting));
             if (!ok) {
                 if (m->mod) restore_unit(ctx, a, *m);
@@ -1637,7 +1698,20 @@ inline void run_day_engage(DailyContext& ctx) {
                     int32_t s = -10 * d - e.u->troops / 1000;
                     if (load[j] >= need) s -= 100;
                     if (static_cast<int32_t>(j) == cur) s += 10;
-                    if (e.is_engine) s += 15;
+                    if (e.is_engine) {
+                        if (ctx.is_v1_raw(f)) {
+                            s += 15;
+                        } else {
+                            bool near_own_city = false;
+                            for (const auto& ckv : ctx.city_by_id) {
+                                if (ckv.second->force_id == f && hex_dist(e.u->tile_id, ckv.second->tile_id) <= 6) {
+                                    near_own_city = true;
+                                    break;
+                                }
+                            }
+                            s += near_own_city ? 65 : 45;
+                        }
+                    }
                     if (a.u->land_formation == FORM_FENGSHI && (e.is_yanxing || e.is_engine)) s += 40;
                     if (s > best_score) { best_score = s; best = static_cast<int32_t>(j); }
                 }
@@ -1752,19 +1826,27 @@ inline void run_day_fu(
         }
     }
 
-    // Rule 1: opportunistic 府 within 3 hexes for siege units.
+    // Rule 1: opportunistic 府 within 3 hexes for siege units (including v3 counter-offensive units with troops_id == 0).
     for (const auto& a : ctx.units) {
         if (!ctx.has_mod(a.u->force_id, SAN14_TACTICAL_MOD_SIEGEPLAN)) continue;
-        if (!is_melee_formation(a.u->land_formation) || a.troops_id == 0 || !is_siege_task(a.troops_purpose)) continue;
+        const bool raw = ctx.is_v1_raw(a.u->force_id);
+        const bool native_siege = (a.troops_id > 0 && is_siege_task(a.troops_purpose));
+        const bool direct_siege = (!raw && a.troops_id == 0 &&
+                                   a.u->order_code == static_cast<uint32_t>(ACT_ATTACK_CITY) &&
+                                   a.u->target_type == static_cast<uint32_t>(TT_CITY) &&
+                                   a.u->target_id > 0);
+        if (!is_melee_formation(a.u->land_formation) || (!native_siege && !direct_siege)) continue;
         OrderMem* m = track_unit(ctx, a);
         if (!m || m->mod || st.fu_mem[a.u->slot].tile <= MAX_TILE_ID || a.u->task_locked != 0) continue;
-        if (a.u->order_code != static_cast<uint32_t>(ACT_MOVE) &&
+        if (!direct_siege &&
+            a.u->order_code != static_cast<uint32_t>(ACT_MOVE) &&
             a.u->order_code != static_cast<uint32_t>(ACT_WAIT) &&
             a.u->order_code != static_cast<uint32_t>(ACT_MARCH_ALT)) continue;
-        if (a.is_lead && ctx.troops_count[a.troops_id] >= 2) continue;
+        if (native_siege && a.is_lead && ctx.troops_count[a.troops_id] >= 2) continue;
         if (has_war_foe_near(ctx, a.u->force_id, a.u->tile_id, FU_SAFE)) continue;
 
-        const uint32_t goal_tile = ctx.foothold_tile(a.troops_goal_id);
+        const uint32_t goal_id = native_siege ? a.troops_goal_id : a.u->target_id;
+        const uint32_t goal_tile = ctx.foothold_tile(goal_id);
         const uint32_t goal_area = (goal_tile <= MAX_TILE_ID) ? ctx.area_at(goal_tile) : 0u;
         auto& fm = st.fu_mem[a.u->slot];
         uint32_t best_ar = 0;
@@ -2757,12 +2839,34 @@ inline void run_day_retreat(DailyContext& ctx) {
             }
         }
         std::unordered_set<uint32_t> flipped_troops;
+        auto is_on_own_area = [&](uint32_t tile_id, uint32_t force_id) -> bool {
+            if (ctx.tile_owner(tile_id) == force_id) return true;
+            const uint32_t ar = ctx.area_at(tile_id);
+            if (ar > 0) {
+                auto ait = ctx.area_by_id.find(ar);
+                if (ait != ctx.area_by_id.end() && ait->second->owner_force_id == force_id) return true;
+            }
+            return false;
+        };
         for (size_t k : intercept_leads) {
             const auto& lead = ctx.units[k];
             if (flipped_troops.count(lead.troops_id)) continue;
+            const bool raw = ctx.is_v1_raw(lead.u->force_id);
+            const int32_t safe_dist = raw ? p.retreat_home_safe_dist : p.v2_retreat_safe_dist;
             const uint32_t home_city = ctx.unit_home_city_id(lead);
             const uint32_t home_tile = ctx.foothold_tile(home_city);
-            if (home_tile > MAX_TILE_ID || hex_dist(lead.u->tile_id, home_tile) <= p.retreat_home_safe_dist) continue;
+            const int32_t home_dist = (home_tile <= MAX_TILE_ID) ? hex_dist(lead.u->tile_id, home_tile) : 9999;
+            if (home_tile > MAX_TILE_ID) continue;
+
+            if (raw) {
+                if (home_dist <= safe_dist) continue;
+            } else {
+                const bool own_area = is_on_own_area(lead.u->tile_id, lead.u->force_id);
+                if ((home_dist <= safe_dist || own_area) &&
+                    lead.u->troops >= 1500 && lead.u->morale >= 30) {
+                    continue;
+                }
+            }
 
             float ours = lead.troops_fighting_strength;
             float our_around = 0.0f;
@@ -2780,9 +2884,26 @@ inline void run_day_retreat(DailyContext& ctx) {
                 }
             }
             if (our_around > ours) ours = our_around;
+
+            int32_t eff_ratio_pct = raw ? p.retreat_ratio_pct : p.v3_retreat_deep_ratio_pct;
+            if (!raw && home_dist <= p.v2_retreat_home_zone_dist) {
+                float city_str = 0.0f;
+                if (ctx.ops && ctx.ops->city_base_strength) {
+                    const int32_t cs = ctx.ops->city_base_strength(ctx.ops->ops_context, home_city, 0, 0, 0);
+                    if (cs > 0) city_str = static_cast<float>(cs);
+                }
+                if (city_str <= 0.0f) {
+                    auto hcit = ctx.city_by_id.find(home_city);
+                    if (hcit != ctx.city_by_id.end() && hcit->second->troops > 2000) {
+                        city_str = static_cast<float>(hcit->second->troops - 2000) * 1.5f;
+                    }
+                }
+                ours += city_str * 0.40f;
+                eff_ratio_pct = p.v2_retreat_home_zone_ratio_pct;
+            }
             if (ours <= 0.0f) continue;
 
-            if (their_around * 100.0f > ours * static_cast<float>(p.retreat_ratio_pct)) {
+            if (their_around * 100.0f > ours * static_cast<float>(eff_ratio_pct)) {
                 if (ctx.ops->set_troops_purpose(ctx.ops->ops_context, lead.troops_id, 0, home_city) == SAN14_OK) {
                     flipped_troops.insert(lead.troops_id);
                     record_telemetry(st, lead.u->force_id, SAN14_TACTICAL_MOD_RETREAT);
@@ -2794,11 +2915,13 @@ inline void run_day_retreat(DailyContext& ctx) {
                     if (hex_dist(lead.u->tile_id, l2.u->tile_id) > p.retreat_scan_radius) continue;
                     const uint32_t h2 = ctx.unit_home_city_id(l2);
                     const uint32_t ht2 = ctx.foothold_tile(h2);
-                    if (ht2 <= MAX_TILE_ID && hex_dist(l2.u->tile_id, ht2) > p.retreat_home_safe_dist) {
-                        if (ctx.ops->set_troops_purpose(ctx.ops->ops_context, l2.troops_id, 0, h2) == SAN14_OK) {
-                            flipped_troops.insert(l2.troops_id);
-                            record_telemetry(st, l2.u->force_id, SAN14_TACTICAL_MOD_RETREAT);
-                        }
+                    if (ht2 > MAX_TILE_ID) continue;
+                    const int32_t hd2 = hex_dist(l2.u->tile_id, ht2);
+                    if (hd2 <= safe_dist) continue;
+                    if (!raw && is_on_own_area(l2.u->tile_id, l2.u->force_id) && l2.u->troops >= 1500) continue;
+                    if (ctx.ops->set_troops_purpose(ctx.ops->ops_context, l2.troops_id, 0, h2) == SAN14_OK) {
+                        flipped_troops.insert(l2.troops_id);
+                        record_telemetry(st, l2.u->force_id, SAN14_TACTICAL_MOD_RETREAT);
                     }
                 }
             }
@@ -2876,6 +2999,62 @@ inline void SAN14_MOD_CALL on_daily_tactical_tick(
     run_day_retreat(ctx);
 }
 
+// Shared counter-attack window evaluator (pure general city/unit/distance semantics).
+inline bool evaluate_counter_attack_window(
+    const San14TacticalWorld* w,
+    const San14TacticalHostOps* ops,
+    uint32_t att_force,
+    uint32_t district_id,
+    const San14TacticalCity* target
+) {
+    if (!w || !w->cities || att_force == 0 || !target || target->force_id == 0) return false;
+    if (!is_enemy_force(w, ops, att_force, target->force_id)) return false;
+
+    int32_t att_surplus = 0;
+    int32_t best_city_troops = 0;
+    uint32_t best_city_tile = SAN14_TACTICAL_INVALID_TILE_ID;
+    for (uint32_t i = 0; i < w->city_count; ++i) {
+        const auto& c = w->cities[i];
+        if (c.force_id != att_force) continue;
+        if (district_id != 0 && c.district_id != district_id) continue;
+        if (hex_dist(c.tile_id, target->tile_id) > 24) continue;
+        if (c.troops > 5000) att_surplus += (c.troops - 5000);
+        if (c.troops > best_city_troops) {
+            best_city_troops = c.troops;
+            best_city_tile = c.tile_id;
+        }
+    }
+    if (best_city_troops < 11000) return false;
+
+    int32_t close_threat_on_staging = 0;
+    int32_t enemy_local = (std::max)(0, target->troops);
+    int32_t att_siege_field = 0;
+    for (uint32_t i = 0; i < w->unit_count; ++i) {
+        const auto& u = w->units[i];
+        if (u.kind != 1 || u.troops <= 0) continue;
+        if (u.force_id == att_force) {
+            const auto* ext = find_unit_ext(w, u.slot);
+            if (ext && is_siege_task(ext->troops_purpose) && ext->troops_goal_id == target->city_id) {
+                att_siege_field += u.troops;
+            }
+        } else if (is_enemy_force(w, ops, att_force, u.force_id)) {
+            if (best_city_tile <= MAX_TILE_ID && hex_dist(u.tile_id, best_city_tile) <= 6) {
+                close_threat_on_staging += u.troops;
+                if (is_siege_formation(u.land_formation) && hex_dist(u.tile_id, best_city_tile) <= 4) {
+                    return false;
+                }
+            }
+            if (hex_dist(u.tile_id, target->tile_id) <= 6) {
+                enemy_local += u.troops;
+            }
+        }
+    }
+    if (close_threat_on_staging * 2 >= best_city_troops) return false;
+    const int32_t att_power = att_surplus + att_siege_field;
+    const int32_t req = (std::max)(8000, static_cast<int32_t>(static_cast<float>(enemy_local) * 1.08f));
+    return att_power >= req;
+}
+
 inline San14Result SAN14_MOD_CALL on_eval_intercept_deploy(
     void* plugin_context,
     const San14TacticalWorld* w,
@@ -2897,6 +3076,7 @@ inline San14Result SAN14_MOD_CALL on_eval_intercept_deploy(
 
     const bool do_gate = force_has_module(*st, w, ops, context->force_id, SAN14_TACTICAL_MOD_GATE);
     const bool do_deploy = force_has_module(*st, w, ops, context->force_id, SAN14_TACTICAL_MOD_DEPLOY);
+    const bool raw = force_is_v1_raw(*st, w, ops, context->force_id);
     if (!do_gate && !do_deploy) return SAN14_OK;
 
     San14TacticalOfficer off{sizeof(off)};
@@ -2920,52 +3100,94 @@ inline San14Result SAN14_MOD_CALL on_eval_intercept_deploy(
         }
     }
 
-    // 2. Deploy intercept composition (split needed troops among strong generals + flank + cheerleaders).
+    // 2. Deploy intercept composition (split needed troops among strong generals + flank + Yanxing shield synergy).
     if (do_deploy && have_off) {
         const auto& p = st->params;
         const uint32_t wave_key = (context->district_id << 16) ^ (context->source_foothold_id << 8) ^ context->target_unit_slot;
         const uint32_t date_key = w->year * 10000u + w->month * 100u + w->day;
         auto& wave = st->deploy_waves[wave_key];
 
-        uint32_t strong_cnt = 0;
-        if (context->candidate_officer_ids && context->candidate_count > 0 && ops->get_officer) {
-            for (uint32_t i = 0; i < context->candidate_count; ++i) {
-                San14TacticalOfficer cand{sizeof(cand)};
-                if (ops->get_officer(ops->ops_context, context->candidate_officer_ids[i], &cand) == SAN14_OK &&
-                    cand.leadership >= p.deploy_strong_leadership) {
-                    ++strong_cnt;
+        if (raw) {
+            uint32_t strong_cnt = 0;
+            if (context->candidate_officer_ids && context->candidate_count > 0 && ops->get_officer) {
+                for (uint32_t i = 0; i < context->candidate_count; ++i) {
+                    San14TacticalOfficer cand{sizeof(cand)};
+                    if (ops->get_officer(ops->ops_context, context->candidate_officer_ids[i], &cand) == SAN14_OK &&
+                        cand.leadership >= p.deploy_strong_leadership) {
+                        ++strong_cnt;
+                    }
                 }
+            } else if (off.leadership >= p.deploy_strong_leadership) {
+                strong_cnt = 1;
             }
-        } else if (off.leadership >= p.deploy_strong_leadership) {
-            strong_cnt = 1;
-        }
-        const uint32_t k_mains = (std::min)(p.deploy_max_mains, (std::max)(1u, strong_cnt));
+            const uint32_t k_mains = (std::min)(p.deploy_max_mains, (std::max)(1u, strong_cnt));
 
-        if (context->sent_count == 0 || wave.date_key != date_key || wave.target_foothold != context->target_foothold_id) {
-            const int32_t base_total = (context->needed_strength > context->troops) ? context->needed_strength : context->troops;
-            int32_t share = base_total / static_cast<int32_t>(k_mains);
-            if (share < p.deploy_min_share) share = p.deploy_min_share;
-            wave = DeployWaveMem{date_key, context->target_foothold_id, share, false};
-        }
-
-        if (context->sent_count < k_mains && off.leadership >= p.deploy_strong_leadership) {
-            const int32_t cap = (std::min)(context->max_troops > 0 ? context->max_troops : off.max_troops, context->troops);
-            if (wave.share_troops > 0 && wave.share_troops < cap) {
-                out_decision->override_troops = wave.share_troops;
+            if (context->sent_count == 0 || wave.date_key != date_key || wave.target_foothold != context->target_foothold_id) {
+                const int32_t base_total = (context->needed_strength > context->troops) ? context->needed_strength : context->troops;
+                int32_t share = base_total / static_cast<int32_t>(k_mains);
+                if (share < p.deploy_min_share) share = p.deploy_min_share;
+                wave = DeployWaveMem{date_key, context->target_foothold_id, share, k_mains, false, false};
             }
-            if (context->sent_count >= 1 && !wave.flank_assigned && out_decision->override_formation_id == 0 &&
-                ((off.land_formation_mask & (1u << FORM_FENGSHI)) != 0)) {
+
+            if (context->sent_count < k_mains && off.leadership >= p.deploy_strong_leadership) {
+                const int32_t cap = (std::min)(context->max_troops > 0 ? context->max_troops : off.max_troops, context->troops);
+                if (wave.share_troops > 0 && wave.share_troops < cap) {
+                    out_decision->override_troops = wave.share_troops;
+                }
+                if (context->sent_count >= 1 && !wave.flank_assigned && out_decision->override_formation_id == 0 &&
+                    ((off.land_formation_mask & (1u << FORM_FENGSHI)) != 0)) {
+                    out_decision->override_formation_id = FORM_FENGSHI;
+                    wave.flank_assigned = true;
+                }
+                record_telemetry(*st, context->force_id, SAN14_TACTICAL_MOD_DEPLOY);
+            } else if (off.leadership < p.deploy_strong_leadership) {
+                if (context->troops > p.deploy_cheer_cap) {
+                    out_decision->override_troops = p.deploy_cheer_cap;
+                }
+                if (out_decision->override_formation_id == 0 && ((off.land_formation_mask & (1u << FORM_YANXING)) != 0)) {
+                    out_decision->override_formation_id = FORM_YANXING;
+                }
+                record_telemetry(*st, context->force_id, SAN14_TACTICAL_MOD_DEPLOY);
+            }
+            return SAN14_OK;
+        }
+
+        // v4.1: keep full native troops & melee frontline formations for strong generals (never skip_deploy in bt_deploy!),
+        //       reserve FORM_YANXING for weak support (<60) or pure low-strength strategists (<=3000 troops) so frontline never collapses.
+        const bool can_yanxing = ((off.land_formation_mask & (1u << FORM_YANXING)) != 0);
+        const bool can_fengshi = ((off.land_formation_mask & (1u << FORM_FENGSHI)) != 0);
+
+        if (context->sent_count == 0 || wave.date_key != date_key ||
+            wave.target_foothold != context->target_foothold_id) {
+            wave = DeployWaveMem{date_key, context->target_foothold_id, 0, p.deploy_max_mains, false, false};
+        }
+
+        bool changed = false;
+        if (off.leadership >= p.deploy_strong_leadership) {
+            const bool pure_strategist_bow = (off.strength < 55 && off.intelligence >= 80 && context->troops <= 3000);
+            if (context->sent_count >= 1 && out_decision->override_formation_id == 0 &&
+                !wave.yanxing_assigned && can_yanxing && pure_strategist_bow) {
+                out_decision->override_formation_id = FORM_YANXING;
+                wave.yanxing_assigned = true;
+                changed = true;
+            } else if (context->sent_count >= 2 && out_decision->override_formation_id == 0 &&
+                       !wave.flank_assigned && can_fengshi) {
                 out_decision->override_formation_id = FORM_FENGSHI;
                 wave.flank_assigned = true;
+                changed = true;
             }
-            record_telemetry(*st, context->force_id, SAN14_TACTICAL_MOD_DEPLOY);
-        } else if (off.leadership < p.deploy_strong_leadership) {
+        } else {
             if (context->troops > p.deploy_cheer_cap) {
                 out_decision->override_troops = p.deploy_cheer_cap;
+                changed = true;
             }
-            if (out_decision->override_formation_id == 0 && ((off.land_formation_mask & (1u << FORM_YANXING)) != 0)) {
+            if (out_decision->override_formation_id == 0 && can_yanxing) {
                 out_decision->override_formation_id = FORM_YANXING;
+                wave.yanxing_assigned = true;
+                changed = true;
             }
+        }
+        if (changed) {
             record_telemetry(*st, context->force_id, SAN14_TACTICAL_MOD_DEPLOY);
         }
     }
@@ -3032,7 +3254,18 @@ inline San14Result SAN14_MOD_CALL on_eval_command_rollback_ex(
     }
 
     if (eff_force != 0 && force_has_module(*st, w, ops, eff_force, SAN14_TACTICAL_MOD_SIEGEPLAN)) {
-        *out_force_skip = 1;  // siegeenough: never launch under-strength siege when out of command books
+        bool allow_counter = false;
+        if (!force_is_v1_raw(*st, w, ops, eff_force) && w && w->cities) {
+            for (uint32_t i = 0; i < w->city_count; ++i) {
+                const auto& tc = w->cities[i];
+                if (tc.force_id != 0 && is_enemy_force(w, ops, eff_force, tc.force_id) &&
+                    evaluate_counter_attack_window(w, ops, eff_force, district_id, &tc)) {
+                    allow_counter = true;
+                    break;
+                }
+            }
+        }
+        *out_force_skip = allow_counter ? 0 : 1;  // siegeenough: skip weak marches unless counter-attack window is open
         record_telemetry(*st, eff_force, SAN14_TACTICAL_MOD_SIEGEPLAN);
         return SAN14_OK;
     }
