@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "two-city-all-stars-mod",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "scenario": {
     "key": "duel",
     "base_id": 1,
