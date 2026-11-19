@@ -34,6 +34,7 @@
 #include "san14_navigation.h"
 #include "san14_officer_traits.h"
 #include "san14_officer_edit.h"
+#include "san14_battlefield.h"
 
 typedef struct San14LogApi {
     uint32_t struct_size;

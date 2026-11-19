@@ -20,7 +20,8 @@
     "game.read.saves",
     "ui.panel",
     "storage.playthrough",
-    "settings"
+    "settings",
+    "game.read.areas"
   ],
   "default_enabled": true,
   "disable_mode": "hot",

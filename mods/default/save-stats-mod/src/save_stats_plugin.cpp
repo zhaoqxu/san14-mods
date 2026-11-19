@@ -13,6 +13,12 @@ bool domestic_registered=false,domestic_recording_enabled=true,domestic_lease=fa
 using OutcomeRow=std::array<int32_t,8>;
 std::map<uint32_t,OutcomeRow> domestic_values,battle_values;
 bool battle_registered=false,battle_enabled=true,records_lease=false;
+bool contribution_registered=false,battlefield_lease=false,battlefield_enabled=true;
+uint32_t battlefield_caps=0;
+std::map<uint32_t,OutcomeRow> contribution_values;
+constexpr const char* battlefield_key="battlefield.recording";
+bool battlefield_supported(){return host&&host->struct_size>=offsetof(San14HostApi,battlefield)+sizeof(host->battlefield)&&host->battlefield&&host->battlefield->struct_size>=sizeof(San14BattlefieldApi)&&host->battlefield->capabilities&&host->battlefield->set_recording&&host->battlefield->query_officer&&host->roster_tabs&&host->roster_tabs->struct_size>=sizeof(San14RosterTabsApi)&&host->roster_tabs->register_named_tab&&host->roster_tabs->unregister_named_tab;}
+
 bool history_lease=false,history_action=false;
 uint32_t records_caps=0;
 constexpr const char* domestic_key="domestic.recording";
@@ -63,7 +69,7 @@ San14Result apply_history(bool enabled){
     history_action=enabled;return SAN14_OK;
 }
 void clear_values(){values.clear();}
-void discard(){baseline.clear();baseline_valid=false;clear_values();domestic_values.clear();battle_values.clear();}
+void discard(){contribution_values.clear();baseline.clear();baseline_valid=false;clear_values();domestic_values.clear();battle_values.clear();}
 void reset_context(){discard();have_context=false;revision=0;storage_state=SAN14_STORAGE_UNAVAILABLE;playthrough.clear();}
 uint32_t mask(){uint32_t result=1;for(unsigned i=0;i<5;++i)if(visible[i])result|=1u<<(i+1);return result;}
 San14Result context(San14SaveStorageInfo& out){out={};out.struct_size=sizeof(out);return host->save_storage->context(host->host_context,&out);}
@@ -148,6 +154,22 @@ San14Result SAN14_MOD_CALL domestic_value(void*,uint32_t id,uint32_t col,int32_t
     if(!out||col>=8)return SAN14_E_INVALID_ARGUMENT;if(!active)return SAN14_E_PERMISSION_DENIED;
     const auto found=domestic_values.find(id);if(found==domestic_values.end()||found->second[col]<0)return SAN14_E_NOT_FOUND;*out=found->second[col];return SAN14_OK;
 }
+San14Result SAN14_MOD_CALL contribution_refresh(void*){
+    contribution_values.clear();if(!active)return SAN14_E_PERMISSION_DENIED;
+    try{if(!sync_context())return SAN14_OK;const auto rows=capture();
+        for(const auto& row:rows){San14BattlefieldOfficer t{};t.struct_size=sizeof(t);
+            if(host->battlefield->query_officer(host->host_context,row.first,&t)!=SAN14_OK)continue;
+            OutcomeRow v{};v.fill(-1);
+            if(t.available_categories&SAN14_BATTLEFIELD_OFFICERS){v[0]=count(t.field_damage);v[1]=count(t.city_damage);v[2]=count(t.battle_losses);v[3]=count(t.durability_damage);}
+            if(t.available_categories&SAN14_BATTLEFIELD_TACTICS){v[4]=count(t.tactics_used);v[5]=count(t.links_joined);v[6]=count(t.links_started);v[7]=count(t.links_followed);}
+            contribution_values.emplace(row.first,v);
+        }San14SaveStorageInfo after{};if(context(after)!=SAN14_OK||!same_context(after))contribution_values.clear();
+    }catch(...){contribution_values.clear();log("Battle contribution refresh failed.");}return SAN14_OK;
+}
+San14Result SAN14_MOD_CALL contribution_value(void*,uint32_t id,uint32_t col,int32_t* out){
+    if(!out||col>=8)return SAN14_E_INVALID_ARGUMENT;if(!active)return SAN14_E_PERMISSION_DENIED;
+    const auto found=contribution_values.find(id);if(found==contribution_values.end()||found->second[col]<0)return SAN14_E_NOT_FOUND;*out=found->second[col];return SAN14_OK;
+}
 San14Result SAN14_MOD_CALL battle_refresh(void*){
     battle_values.clear();if(!active)return SAN14_E_PERMISSION_DENIED;
     try{if(!sync_context())return SAN14_OK;const auto rows=capture();
@@ -215,6 +237,10 @@ San14Result SAN14_MOD_CALL setting(void*,San14StringView key,int32_t next){
     if(key.length==std::strlen(battle_key)&&!std::memcmp(key.data,battle_key,key.length)){
         if(active){const auto r=apply_records(next!=0,domestic_recording_enabled);if(r!=SAN14_OK)return r;}battle_enabled=next!=0;return SAN14_OK;
     }
+    if(key.length==std::strlen(battlefield_key)&&!std::memcmp(key.data,battlefield_key,key.length)){
+        if(active&&battlefield_supported()){auto r=host->battlefield->set_recording(host->host_context,next?battlefield_caps:0);if(r!=SAN14_OK)return r;battlefield_lease=next!=0;}
+        battlefield_enabled=next!=0;return SAN14_OK;
+    }
     for(size_t i=0;i<5;++i)if(key.length==std::strlen(keys[i])&&!std::memcmp(key.data,keys[i],key.length)){
         const auto before=visible[i];visible[i]=next!=0;
         if(active&&tab_registered){const auto result=host->roster_tabs->set_visible_columns(host->host_context,mask());if(result!=SAN14_OK){visible[i]=before;return result;}}
@@ -233,12 +259,17 @@ San14Result SAN14_MOD_CALL on_load(San14ModContext*){
         const auto result=host->settings.register_bool(host->host_context,&spec);if(result!=SAN14_OK)return result;}
     const San14BoolSetting domestic_spec{sizeof(domestic_spec),text(domestic_key),text(u8"记录武将内政贡献"),text(u8"累计实际开发点、征兵、训练士气、擢用成功和外交成功。资金、粮食开发是商业、农业开发点，不是收入；只记最终成功，关闭保留数据，读档回退，旧贡献不能追溯。"),1,setting,nullptr,text(u8"内政统计"),0};
     if(const auto result=host->settings.register_bool(host->host_context,&domestic_spec);result!=SAN14_OK)return result;
-    const San14BoolSetting battle_spec{sizeof(battle_spec),text(battle_key),text(u8"记录武将战斗结果"),text(u8"累计单挑胜败、歼灭敌队、被灭队、攻克城池、俘虏敌将和被俘次数。俘虏敌将不含破城俘虏。平局不记胜败；胜率百分数保留一位小数，无胜败记录显示“-”。不记录歼灭敌兵或损失兵力。关闭保留数据，读档同步回退。"),1,setting,nullptr,text(u8"战斗统计"),0};
+    const San14BoolSetting battle_spec{sizeof(battle_spec),text(battle_key),text(u8"记录武将战斗结果"),text(u8"累计单挑胜败、歼灭敌队、被灭队、攻克城池、俘虏敌将和被俘次数。俘虏敌将不含破城俘虏。平局不记胜败；胜率百分数保留一位小数，无胜败记录显示“-”。兵力与战法数据由“记录战斗贡献与地区战况”控制。关闭保留数据，读档同步回退。"),1,setting,nullptr,text(u8"战斗统计"),0};
     if(const auto result=host->settings.register_bool(host->host_context,&battle_spec);result!=SAN14_OK)return result;
+    const San14BoolSetting contribution_spec{sizeof(contribution_spec),text(battlefield_key),text(u8"记录战斗贡献与地区战况"),text(u8"累计实际杀伤、战损、城防耐久伤害、具体战法发动与连携主发动／跟随次数。连携合并杀伤按计算贡献比例分配。地区累计受击方的实际战斗减员，包含伤兵，不等于阵亡人数。只记开启后的事件，读档回退；各战法明细及地区战况可在武将事迹页查看。"),battlefield_supported()?1:0,setting,nullptr,text(u8"战斗统计"),battlefield_supported()?0u:SAN14_BOOL_SETTING_DISABLED};
+    if(const auto result=host->settings.register_bool(host->host_context,&contribution_spec);result!=SAN14_OK)return result;
     return SAN14_OK;
 }
 San14Result SAN14_MOD_CALL on_disable(San14ModContext*){
     active=false;bool busy=false;
+    if(battlefield_lease&&battlefield_supported()){auto r=host->battlefield->set_recording(host->host_context,0);if(r==SAN14_OK||r==SAN14_E_NOT_FOUND)battlefield_lease=false;else busy=true;}
+    if(contribution_registered){auto r=host->roster_tabs->unregister_named_tab(host->host_context,text("contribution"));if(r==SAN14_OK||r==SAN14_E_NOT_FOUND)contribution_registered=false;else busy=true;}
+    contribution_values.clear();battlefield_caps=0;
     if(history_action&&history_supported()){const auto r=host->officer_history->set_detail_action(host->host_context,0);if(r==SAN14_OK||r==SAN14_E_NOT_FOUND)history_action=false;else busy=true;}
     if(history_lease&&history_supported()){const auto r=host->officer_history->set_recording(host->host_context,0);if(r==SAN14_OK||r==SAN14_E_NOT_FOUND)history_lease=false;else busy=true;}
     if(records_lease){const auto r=host->officer_records->set_recording(host->host_context,0);if(r==SAN14_OK||r==SAN14_E_NOT_FOUND)records_lease=false;else busy=true;}
@@ -297,6 +328,15 @@ San14Result SAN14_MOD_CALL on_enable(San14ModContext*){
                 if(added!=SAN14_OK){on_disable(nullptr);return added;}domestic_registered=true;
             }else if(started!=SAN14_E_UNSUPPORTED){on_disable(nullptr);return started;}
             else log("Actual domestic settlement observation is unavailable on this game profile.");
+        }
+        if(battlefield_supported()){
+            auto r=host->battlefield->capabilities(host->host_context,&battlefield_caps);if(r!=SAN14_OK){on_disable(nullptr);return r;}
+            int32_t enabled=1;r=host->settings.get_bool(host->host_context,text(battlefield_key),&enabled);if(r!=SAN14_OK){on_disable(nullptr);return r;}battlefield_enabled=enabled!=0;
+            r=host->battlefield->set_recording(host->host_context,enabled?battlefield_caps:0);if(r!=SAN14_OK){on_disable(nullptr);return r;}battlefield_lease=enabled&&battlefield_caps;
+            constexpr const char* contribution_labels[]={u8"野战杀伤",u8"攻城杀伤",u8"自军战损",u8"城防伤害",u8"战法发动",u8"连携参与",u8"连携主发",u8"连携跟随"};
+            std::array<San14RosterColumn,8> cols{};for(size_t i=0;i<8;++i)cols[i]={sizeof(San14RosterColumn),text(contribution_labels[i]),0,0};
+            const San14RosterTabSpec contribution_spec{sizeof(contribution_spec),text(u8"战功"),cols.data(),8,255,contribution_refresh,contribution_value,nullptr};
+            r=host->roster_tabs->register_named_tab(host->host_context,text("contribution"),&contribution_spec);if(r!=SAN14_OK){on_disable(nullptr);return r;}contribution_registered=true;
         }
         sync_context();return SAN14_OK;
     }catch(...){on_disable(nullptr);return SAN14_E_PLUGIN_FAILED;}

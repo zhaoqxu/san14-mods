@@ -18,6 +18,12 @@ struct Fixture {
     std::vector<std::string> registered_order;
     San14RosterTabRefresh refresh_callback=nullptr;San14RosterTabValue value_callback=nullptr;void* tab_context=nullptr;
     std::vector<std::string> columns;
+    San14BattlefieldApi battlefield_api{};uint32_t battlefield_mask=0;bool battlefield_fails=false;
+    San14BattlefieldOfficer contribution{sizeof(contribution),1,SAN14_BATTLEFIELD_ALL};
+    San14RosterTabRefresh contribution_refresh=nullptr;San14RosterTabValue contribution_value=nullptr;
+    static San14Result SAN14_MOD_CALL battlefield_record(void* p,uint32_t mask){auto& f=self(p);if(f.battlefield_fails)return SAN14_E_PLUGIN_FAILED;f.battlefield_mask=mask;return SAN14_OK;}
+    static San14Result SAN14_MOD_CALL battlefield_caps(void*,uint32_t* out){*out=SAN14_BATTLEFIELD_ALL;return SAN14_OK;}
+    static San14Result SAN14_MOD_CALL battlefield_query(void* p,uint32_t id,San14BattlefieldOfficer* out){*out=self(p).contribution;out->officer_id=id;return SAN14_OK;}
     San14DomesticApi domestic_api{};bool recording=false;
     San14OfficerRecordsApi records_api{};uint32_t records_mask=0;
     San14OfficerHistoryApi history_api{};bool history_recording=false,history_visible=false,history_action_fails=false,history_mask_fails=false;uint32_t history_mask=0;
@@ -36,13 +42,14 @@ struct Fixture {
     static San14Result SAN14_MOD_CALL set_recording(void* p,int32_t on){self(p).recording=on!=0;return SAN14_OK;}
     static San14Result SAN14_MOD_CALL query_domestic(void* p,uint32_t id,San14DomesticTotals* out){auto& f=self(p);*out=f.totals;out->officer_id=id;return SAN14_OK;}
     static San14Result SAN14_MOD_CALL register_named(void* p,San14StringView key,const San14RosterTabSpec* spec){auto& f=self(p);
+        if(str(key)=="contribution"){assert(str(spec->title)==u8"战功"&&spec->column_count==8&&spec->visible_mask==255);f.contribution_refresh=spec->refresh;f.contribution_value=spec->value;return SAN14_OK;}
         if(str(key)=="battle"){assert(str(spec->title)==u8"战斗"&&spec->column_count==8&&spec->visible_mask==255);
             for(unsigned i=0;i<8;++i)assert(spec->columns[i].flags==(i==2?SAN14_ROSTER_COLUMN_PERCENT|SAN14_ROSTER_COLUMN_PERCENT_ONE_DECIMAL|SAN14_ROSTER_COLUMN_DASH_IF_MISSING:0u));
             f.battle_refresh=spec->refresh;f.battle_value=spec->value;return SAN14_OK;}
         const unsigned count=f.api.officer_records?8:6;assert(str(key)=="domestic"&&str(spec->title)==u8"内政"&&spec->column_count==count&&spec->visible_mask==((1u<<count)-1));
         for(unsigned i=0;i<count;++i)assert(spec->columns[i].flags==0);
         f.domestic_refresh=spec->refresh;f.domestic_value=spec->value;return SAN14_OK;}
-    static San14Result SAN14_MOD_CALL unregister_named(void* p,San14StringView key){auto& f=self(p);if(str(key)=="battle"){f.battle_refresh=nullptr;f.battle_value=nullptr;return SAN14_OK;}assert(str(key)=="domestic");f.domestic_refresh=nullptr;f.domestic_value=nullptr;return SAN14_OK;}
+    static San14Result SAN14_MOD_CALL unregister_named(void* p,San14StringView key){auto& f=self(p);if(str(key)=="contribution"){f.contribution_refresh=nullptr;f.contribution_value=nullptr;return SAN14_OK;}if(str(key)=="battle"){f.battle_refresh=nullptr;f.battle_value=nullptr;return SAN14_OK;}assert(str(key)=="domestic");f.domestic_refresh=nullptr;f.domestic_value=nullptr;return SAN14_OK;}
     static Fixture& self(void* p){return *static_cast<Fixture*>(p);}
     static San14Result SAN14_MOD_CALL context(void* p,San14SaveStorageInfo* out){auto& f=self(p);f.admitted=f.info.revision;*out=f.info;return SAN14_OK;}
     static San14Result SAN14_MOD_CALL read(void* p,San14StringView scope,San14StringView key,void* out,uint32_t capacity,uint32_t* required){auto& f=self(p);
@@ -62,7 +69,7 @@ struct Fixture {
     static San14Result SAN14_MOD_CALL subscribe(void* p,uint32_t id,int32_t,San14EventCallback callback,void* c,San14Subscription* out){auto& f=self(p);*out=++f.next_sub;f.subs[*out]={id,callback,c};return SAN14_OK;}
     static San14Result SAN14_MOD_CALL unsubscribe(void* p,San14Subscription sub){return self(p).subs.erase(sub)?SAN14_OK:SAN14_E_NOT_FOUND;}
     static San14Result SAN14_MOD_CALL register_bool(void* p,const San14BoolSetting* setting){auto& f=self(p);auto key=str(setting->key);auto cat=str(setting->category);
-        if(key=="general.show_dead_officers")assert(cat==u8"常规");else if(key=="general.officer_deeds"||key.rfind("history.",0)==0)assert(cat==u8"事迹");else if(key=="domestic.recording")assert(cat==u8"内政统计");else if(key=="battle.recording")assert(cat==u8"战斗统计");else assert(cat==u8"武将成长统计");
+        if(key=="general.show_dead_officers")assert(cat==u8"常规");else if(key=="general.officer_deeds"||key.rfind("history.",0)==0)assert(cat==u8"事迹");else if(key=="domestic.recording")assert(cat==u8"内政统计");else if(key=="battle.recording"||key=="battlefield.recording")assert(cat==u8"战斗统计");else assert(cat==u8"武将成长统计");
         f.registered_order.push_back(key);f.settings[key]=*setting;f.prefs[key]=setting->default_value;return SAN14_OK;}
     static San14Result SAN14_MOD_CALL get_bool(void* p,San14StringView key,int32_t* out){auto& f=self(p);auto it=f.prefs.find(str(key));if(it==f.prefs.end())return SAN14_E_NOT_FOUND;*out=it->second;return SAN14_OK;}
     static San14Result SAN14_MOD_CALL register_tab(void* p,const San14RosterTabSpec* spec){auto& f=self(p);assert(!f.refresh_callback&&str(spec->title)==u8"成长"&&spec->column_count==6);
@@ -79,7 +86,7 @@ struct Fixture {
         storage_api={sizeof(storage_api),context,nullptr};tabs_api={sizeof(tabs_api),register_tab,visibility,unregister_tab,set_dead_officers};api.save_storage=&storage_api;api.roster_tabs=&tabs_api;
         api.storage={sizeof(api.storage),read,write};api.roster={sizeof(api.roster),capture};api.events={sizeof(api.events),subscribe,unsubscribe};api.settings={sizeof(api.settings),register_bool,get_bool};
         mod.struct_size=sizeof(mod);mod_context.struct_size=sizeof(mod_context);assert(SAN14Mod_Initialize(&api,&mod)==SAN14_OK);assert(mod.on_load(&mod_context)==SAN14_OK);
-        assert(settings.size()==26&&registered_order[0]=="general.show_dead_officers"&&registered_order[1]=="general.officer_deeds");
+        assert(settings.size()==27&&registered_order[0]=="general.show_dead_officers"&&registered_order[1]=="general.officer_deeds");
         assert(settings.at("general.show_dead_officers").default_value==0&&settings.at("general.show_dead_officers").flags==0&&settings.at("general.show_dead_officers").changed);
         assert(settings.at("general.officer_deeds").default_value==(history?1:0)&&settings.at("general.officer_deeds").flags==(history?0u:SAN14_BOOL_SETTING_DISABLED)&&settings.at("general.officer_deeds").changed);
         assert(str(settings.at("general.officer_deeds").description).find(u8"全势力（含电脑）")!=std::string::npos);
@@ -184,5 +191,17 @@ int main(){
         auto& death=f.settings.at("history.death");assert(death.changed(nullptr,death.key,0)==SAN14_OK);assert(master.changed(nullptr,master.key,1)==SAN14_OK&&!(f.history_mask&SAN14_HISTORY_RECORD_DEATH)&&!(f.history_mask&SAN14_HISTORY_RECORD_EMPLOY));
     }
     {Fixture f(true,false);assert(f.history_recording&&f.history_visible);for(const auto& option:history_options)assert(f.settings.at(option.key).flags==SAN14_BOOL_SETTING_DISABLED);}
+    {Fixture f;assert(f.mod.on_disable(&f.mod_context)==SAN14_OK);
+        f.battlefield_api={sizeof(f.battlefield_api),Fixture::battlefield_record,Fixture::battlefield_caps,nullptr,Fixture::battlefield_query,nullptr};f.api.battlefield=&f.battlefield_api;
+        f.tabs_api.register_named_tab=Fixture::register_named;f.tabs_api.unregister_named_tab=Fixture::unregister_named;
+        f.prefs["battlefield.recording"]=1;assert(f.mod.on_enable(&f.mod_context)==SAN14_OK&&f.battlefield_mask==15&&f.contribution_refresh);
+        f.contribution.field_damage=123;f.contribution.tactics_used=4;f.contribution.links_joined=2;f.contribution.links_started=1;f.contribution.links_followed=1;
+        assert(f.contribution_refresh(nullptr)==SAN14_OK);int32_t n=0;assert(f.contribution_value(nullptr,1,0,&n)==SAN14_OK&&n==123);assert(f.contribution_value(nullptr,1,4,&n)==SAN14_OK&&n==4);assert(f.contribution_value(nullptr,1,7,&n)==SAN14_OK&&n==1);
+        f.contribution.available_categories=0;assert(f.contribution_refresh(nullptr)==SAN14_OK&&f.contribution_value(nullptr,1,0,&n)==SAN14_E_NOT_FOUND);
+        f.contribution.available_categories=15;f.contribution.field_damage=UINT64_MAX;assert(f.contribution_refresh(nullptr)==SAN14_OK&&f.contribution_value(nullptr,1,0,&n)==SAN14_OK&&n==INT32_MAX);
+        auto& toggle=f.settings.at("battlefield.recording");f.battlefield_fails=true;assert(toggle.changed(nullptr,toggle.key,0)==SAN14_E_PLUGIN_FAILED&&f.battlefield_mask==15);f.battlefield_fails=false;assert(toggle.changed(nullptr,toggle.key,0)==SAN14_OK&&!f.battlefield_mask);
+        ++f.info.revision;f.send(SAN14_EVENT_STORAGE_CHANGED);assert(f.contribution_value(nullptr,1,0,&n)==SAN14_E_NOT_FOUND);
+        assert(f.mod.on_disable(&f.mod_context)==SAN14_OK&&!f.battlefield_mask&&!f.contribution_refresh);
+    }
     std::cout<<"Save stats plugin: baseline, rollback, columns, independent global history lease/action, failure rollback and lifecycle passed\n";
 }
