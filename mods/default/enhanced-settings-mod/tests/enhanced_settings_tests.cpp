@@ -643,8 +643,10 @@ int main(){
         click(L"20");assert(ui.force_colors.at(1)==20&&ui.set_color_calls==calls_before+1);
         click(L"撤销上次修改");assert(ui.force_colors.at(1)==0);
         click(L"返回");assert(runtime.panel_count()==1&&visible()==1);
-        click(L"预设");click(L"读取");assert(runtime.panel_count()==2&&visible()==1);
-        click(L"取消");assert(runtime.panel_count()==1&&visible()==1);
+        for(const auto& p:native.panels)for(const auto& c:p.second->texts){
+            const std::wstring caption(c->value);
+            assert(caption!=L"预设"&&caption!=L"读取设定"&&caption!=L"保存为预设");
+        }
         assert(api.on_disable(&ctx)==SAN14_OK&&runtime.panel_count()==0);api.on_unload(&ctx);
         assert(native.created==native.destroyed);
     }
@@ -847,53 +849,33 @@ int main(){
     assert(api.on_disable(&ctx)==SAN14_OK);api.on_unload(&ctx);
     stats_mock::dialog_tests(host);
 
-    // Reading new-game defaults into an older slot is a preview and applies
-    // only the chosen fields to that slot after confirmation.
+    // Settings written by the previous candidate still load and save in their
+    // original format. Existing named preset data stays untouched.
     storage_info.state=SAN14_STORAGE_READY;
     strcpy_s(storage_info.save_basename,"svdexceSC00.s14");
-    Preferences new_game;new_game.values[20]=145;seed_v3(ui.global_storage,new_game);
-    Preferences old_slot;old_slot.values[0]=77000;old_slot.values[20]=110;seed_v3(local_storage,old_slot);
+    Preferences new_game;new_game.values[20]=145;new_game.selected.set(20);
+    ui.global_storage["enhanced.preferences.v4"]=bytes(new_game);
+    const std::vector<uint8_t> preset_bytes{1,2,3};
+    ui.global_storage["enhanced.presets.v1"]=preset_bytes;
+    Preferences old_slot;old_slot.values[0]=77000;old_slot.values[20]=110;old_slot.selected.set(0);
+    local_storage["enhanced.preferences.v4"]=bytes(old_slot);
     ++storage_info.revision;
     assert(init(&host,&api)==SAN14_OK&&api.on_load(&ctx)==SAN14_OK&&api.on_enable(&ctx)==SAN14_OK);
     assert(ui.registered_page.open(nullptr)==SAN14_OK);
     const auto old_disk=local_storage,initial_default_records=ui.global_storage,other_slots=peer_storage;
-    click_text(u8"预设");click_text(u8"读取");click_text(u8"新局默认");click_text(u8"常规");
-    assert(slider_value(0)==145&&range_tint("stat")==0xff1d63c7u&&custom_values.at("officer_stat_cap")==110);
+    slide(0,155);
+    assert(slider_value(0)==155&&range_tint("stat")==0xff1d63c7u&&custom_values.at("officer_stat_cap")==110);
     assert(local_storage==old_disk&&ui.global_storage==initial_default_records&&peer_storage==other_slots);
     fail_saved_edit=true;click_text(u8"保存变更");fail_saved_edit=false;
-    assert(local_storage==old_disk&&saved(ui.global_storage).values[20]==145&&slider_value(0)==145);
+    assert(local_storage==old_disk&&ui.global_storage==initial_default_records&&slider_value(0)==155);
     click_text(u8"保存变更");
-    assert(saved(local_storage).values[20]==145&&saved(local_storage).values[0]==77000);
-    assert(saved(ui.global_storage).values[20]==145&&peer_storage==other_slots);
+    assert(saved(local_storage).values[20]==155&&saved(local_storage).values[0]==77000);
+    assert(saved(ui.global_storage).values[20]==155&&peer_storage==other_slots);
 
     click_text(u8"标准");click_text(u8"保存变更");
     assert(saved(local_storage).values[20]==100&&saved(local_storage).selected.has(20));
-    auto name_preset=[&](const std::string& name){
-        const auto h=find_control_by_id(top(),"preset.name");assert(h);
-        const auto cb=inputs.at(h);cb.first(cb.second,h,{name.data(),static_cast<uint32_t>(name.size())});
-    };
-    const auto before_preset=local_storage;
-    click_text(u8"预设");click_text(u8"保存为预设");name_preset(u8"自定上限");click_text(u8"保存");
-    assert(local_storage==before_preset&&ui.global_storage.count("enhanced.presets.v1"));
-    const auto preset_bytes=ui.global_storage.at("enhanced.presets.v1");
-    click_text(u8"保存为预设");name_preset(u8"自定上限");click_text(u8"保存");
-    assert(ui.stack.size()==2&&ui.global_storage.at("enhanced.presets.v1")==preset_bytes);click_text(u8"取消");
-    assert(api.on_disable(&ctx)==SAN14_OK);api.on_unload(&ctx);
-
-    Preferences another_slot;another_slot.values[20]=190;another_slot.values[25]=203;
-    seed_v3(local_storage,another_slot);++storage_info.revision;
-    assert(init(&host,&api)==SAN14_OK&&api.on_load(&ctx)==SAN14_OK&&api.on_enable(&ctx)==SAN14_OK);
-    assert(ui.registered_page.open(nullptr)==SAN14_OK);
-    click_text(u8"预设");click_text(u8"读取");click_text(u8"自定上限");click_text(u8"常规");
-    assert(slider_value(0)==100&&custom_values.at("officer_stat_cap")==190);
-    click_text(u8"保存变更");
-    assert(saved(local_storage).values[20]==100&&saved(local_storage).values[25]==203&&saved(local_storage).values[0]==77000);
     assert(ui.global_storage.at("enhanced.presets.v1")==preset_bytes);
-    const auto persisted=local_storage;
-    click_text(u8"预设");click_text(u8"读取");assert(ui.stack.size()==2);
-    ++storage_info.revision;fire(SAN14_EVENT_SAVE_LOADED);fire(SAN14_EVENT_UI_IDLE);
-    assert(ui.stack.size()==1&&local_storage==persisted);
     assert(api.on_disable(&ctx)==SAN14_OK);api.on_unload(&ctx);
     FreeLibrary(dll);
-    std::cout<<"Enhanced settings: 102 caps, legacy migration, preset preview and isolation, native UI, rollback and lifecycle passed\n";
+    std::cout<<"Enhanced settings: 102 caps, previous storage formats, native UI, rollback and lifecycle passed\n";
 }

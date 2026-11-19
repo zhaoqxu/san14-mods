@@ -4,7 +4,6 @@
 #include "san14_reload.h"
 #include "settings_model.h"
 #include "pending_settings.h"
-#include "preset_dialog.h"
 #include "force_color_dialog.h"
 #include "officer_traits_dialog.h"
 #include "officer_stats_dialog.h"
@@ -30,9 +29,6 @@ std::unique_ptr<san14::ExpertPage> page;
 ForceColorDialog colors;
 OfficerTraitsDialog traits_editor;
 OfficerStatsDialog stats_editor;
-PresetDialog preset_dialog;
-uint64_t preset_revision=0;
-std::string preset_playthrough;
 San14PanelHandle dropdown=0;
 struct Choice {bool formation;size_t index;};
 std::vector<Choice> choices;
@@ -178,7 +174,7 @@ San14Result sync(){
     }
     const bool values_changed=std::memcmp(&next,&current,sizeof(next))!=0;
     const auto applied=switched||values_changed?apply(next,true):SAN14_OK;if(applied!=SAN14_OK)return applied;
-    current=next;if(switched){preset_dialog.close();draft=next;draft_ready=true;}revision=info.revision;playthrough=info.state==SAN14_STORAGE_READY?info.playthrough_id:"";sync_needed=false;
+    current=next;if(switched){draft=next;draft_ready=true;}revision=info.revision;playthrough=info.state==SAN14_STORAGE_READY?info.playthrough_id:"";sync_needed=false;
     if(page){if(switched||values_changed){traits_editor.reset();stats_editor.reset();}update_rows();page->refresh();update_pending();}
     return SAN14_OK;
 }
@@ -217,34 +213,6 @@ void update_pending(const std::string& message){
 San14Result commit(const Preferences& next){
     if(!active)return SAN14_E_BUSY;if(!next.valid())return SAN14_E_INVALID_ARGUMENT;
     draft=next;draft_ready=true;update_pending();return SAN14_OK;
-}
-San14Result preview_preset(const Preferences& source){
-    auto result=sync();
-    if(result!=SAN14_OK||revision!=preset_revision||playthrough!=preset_playthrough){
-        update_pending(u8"存档忙碌或已切换，请重新读取设定。");
-        return result==SAN14_OK?SAN14_E_STALE_GENERATION:result;
-    }
-    San14SaveStorageInfo info{sizeof(info)};
-    result=host->save_storage->context(host->host_context,&info);if(result!=SAN14_OK)return result;
-    if(info.revision!=preset_revision){update_pending(u8"存档已切换，请重新读取设定。");return SAN14_E_STALE_GENERATION;}
-    auto next=draft;
-    for(size_t i=0;i<kCustomCount;++i)if(supported[i]&&source.selected.has(i))next.values[i]=source.values[i];
-    if(source.selected.has(SettingFields::edit))next.enhanced_edit=source.enhanced_edit;
-    if(source.selected.has(SettingFields::merit))next.extended_merit=source.extended_merit;
-    result=commit(next);if(result!=SAN14_OK)return result;
-    update_rows();page->refresh();
-    if(!PendingSettings(current,draft).count())update_pending(u8"这套设定与当前配置一致。");
-    return SAN14_OK;
-}
-San14Result open_presets(bool reading){
-    const auto result=sync();if(result!=SAN14_OK)return result;
-    preset_revision=revision;preset_playthrough=playthrough;
-    if(reading)return preset_dialog.open(host,defaults,preview_preset);
-    const auto snapshot=PendingSettings(current,draft).merge(draft);
-    if(std::none_of(snapshot.selected.words.begin(),snapshot.selected.words.end(),[](uint32_t word){return word!=0;})){
-        update_pending(u8"请先调整至少一项设定，再保存为预设。");return SAN14_OK;
-    }
-    return preset_dialog.open(host,snapshot,nullptr);
 }
 struct EditTransform {PendingSettings patch;Preferences fallback;};
 San14Result SAN14_MOD_CALL transform_saved(void* context,const San14SavedDataAccess* access){
@@ -349,12 +317,12 @@ San14Result restore_tiers(size_t first,size_t count){
 San14Result SAN14_MOD_CALL open_page(void*){
     if(!active)return SAN14_E_BUSY;
     auto r=sync();if(r!=SAN14_OK)return r;
-    close_dropdown();preset_dialog.close();traits_editor.reset();stats_editor.reset();if(page)page->close();draft=current;
+    close_dropdown();traits_editor.reset();stats_editor.reset();if(page)page->close();draft=current;
     try{
         page=std::make_unique<san14::ExpertPage>(host,u8"增强设定与编辑");
         page->set_footer_actions({{u8"保存变更",[]{return save_pending(SAN14_SAVED_EDIT_CURRENT);}},
             {u8"保存变更到全部存档",[]{return save_pending(SAN14_SAVED_EDIT_ALL);}}});
-        page->footer_hint(u8"保存变更更新当前档和新局默认，其他已有存档不变。\n读取预设进入草稿，保存后同时更新当前档及新局默认。");
+        page->footer_hint(u8"保存变更：当前存档（如有）及新局默认。\n其他已有存档不变；另可选择同步全部存档。");
         page->add_bool(u8"常规","edit",u8"城市编辑支持异族势力",u8"在原生编辑中解锁异族城市 47–51 与异族势力 46–50。",current.enhanced_edit!=0,[](int32_t v){return change_edit(nullptr,{},v);});
         page->add_bool(u8"常规","merit",u8"大幅提高武将功劳上限",u8"功劳上限由 12000 提高至 32767，默认关闭。修改后选择保存范围才生效。",current.extended_merit!=0,[](int32_t v){return change_merit(nullptr,{},v);});
         const auto& defs=custom_defs();
@@ -383,8 +351,6 @@ San14Result SAN14_MOD_CALL open_page(void*){
         }
         if(std::any_of(supported.begin()+kOfficerHireFirst,supported.end(),[](bool v){return v;}))
             page->add_action(u8"雇用","hire.reset",u8"恢复雇用上限标准",u8"恢复七个官爵档位的雇用上限。",[]{return restore_tiers(kOfficerHireFirst,7);},u8"恢复全部雇用");
-        page->add_action(u8"预设","presets.read",u8"读取设定",u8"载入新局默认或命名预设，预览差异后再保存。",[]{return open_presets(true);},u8"读取");
-        page->add_action(u8"预设","presets.save",u8"保存为预设",u8"给当前明确配置的参数和草稿命名，可在其他存档读取。",[]{return open_presets(false);},u8"保存为预设");
         update_rows();update_pending();return page->show();
     }catch(San14Result e){return e;}catch(...){return SAN14_E_PLUGIN_FAILED;}
 }
@@ -430,7 +396,6 @@ San14Result SAN14_MOD_CALL disable(San14ModContext*){
     // Refuse a partial disable while nine-slot mode protects a loaded save.
     // Native five-slot recalculation can erase the extra IDs.
     const auto released=apply_traits(false);if(released!=SAN14_OK)return released;
-    if(preset_dialog.close()!=SAN14_OK)return SAN14_E_BUSY;
     close_dropdown();colors.reset();traits_editor.reset();stats_editor.reset();if(page)page->close();
     bool busy=false;
     for(auto& sub:subscriptions)if(sub){const auto r=host->events.unsubscribe(host->host_context,sub);if(r==SAN14_OK||r==SAN14_E_NOT_FOUND)sub=0;else busy=true;}
@@ -440,7 +405,7 @@ San14Result SAN14_MOD_CALL disable(San14ModContext*){
     if(busy)return SAN14_E_BUSY;
     active=false;revision=0;playthrough.clear();return SAN14_OK;
 }
-void SAN14_MOD_CALL unload(San14ModContext*){preset_dialog.close();page.reset();colors.reset();traits_editor.reset();stats_editor.reset();host=nullptr;active=false;traits_supported=false;traits_applied=false;}
+void SAN14_MOD_CALL unload(San14ModContext*){page.reset();colors.reset();traits_editor.reset();stats_editor.reset();host=nullptr;active=false;traits_supported=false;traits_applied=false;}
 }
 extern "C" SAN14_MOD_EXPORT San14Result SAN14_MOD_CALL SAN14Mod_Initialize(const San14HostApi* h,San14ModApi* out){
     if(!h||!out||out->struct_size<sizeof(*out)||h->abi_version!=SAN14_HOST_ABI_V1||

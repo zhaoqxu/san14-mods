@@ -109,8 +109,8 @@ struct PreferencesV3 {
         return true;
     }
 };
-// The v4 record retains the v3 value prefix. The mask records user choices
-// even when an explicitly saved value happens to equal the game's standard.
+// Keep the v4 wire layout and explicit field selections used by earlier
+// candidates so their current-save and default settings still round-trip.
 struct SettingFields {
     static constexpr size_t edit=kCustomCount,merit=edit+1,count=merit+1;
     std::array<uint32_t,(count+31)/32> words{};
