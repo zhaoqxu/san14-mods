@@ -1,22 +1,11 @@
 #ifndef SAN14_COMPANION_TACTICAL_AI_POLICY_H
 #define SAN14_COMPANION_TACTICAL_AI_POLICY_H
 
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <mutex>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
-
-#include "san14_tactical_ai.h"
+#include "bt_tactical_modules.h"
 
 namespace companion_mod {
 namespace tactical_ai_policy {
 
-constexpr int32_t GRID_WIDTH = 220;
-constexpr int32_t MAX_TILE_ID = SAN14_TACTICAL_MAX_TILE_ID;
 constexpr int32_t WATER_DEFENSE_MAX_DISTANCE = 15;
 constexpr int32_t LAND_DEFENSE_ENGAGE_RADIUS = 10;
 constexpr int32_t CITY_FRONT_APPROACH_RADIUS = 6;
@@ -47,169 +36,9 @@ constexpr int32_t MOVEMENT_TICKS_PER_DAY = 12;
 constexpr int32_t TURN_DAYS = 10;
 constexpr int32_t SIEGE_INTERCEPT_BUFFER = 12;
 
-struct Config {
-    bool naval_defense = false;
-    bool emergency_reinforcement = false;
-    bool siege_interception = false;
-
-    bool any_enabled() const {
-        return naval_defense || emergency_reinforcement || siege_interception;
-    }
-};
-
-struct ActiveAssignment {
-    uint32_t unit_slot = 0;
-    uint32_t commander_id = 0;
-    uint32_t city_id = 0;
-    uint32_t force_id = 0;
-    uint32_t target_slot = 0;
-    uint32_t station_tile = SAN14_TACTICAL_INVALID_TILE_ID;
-    bool naval = false;
-    bool siege = false;
-};
-
-struct State {
-    std::mutex mutex;
-    Config config{};
-    uint32_t last_siege_turn_key = 0;
-    std::unordered_map<uint32_t, uint32_t> city_cooldown_ms;
-    std::unordered_map<uint32_t, ActiveAssignment> assignments;
-
-    void set_config(const Config& next) {
-        std::lock_guard<std::mutex> lock(mutex);
-        const bool changed = (config.naval_defense != next.naval_defense) ||
-                             (config.emergency_reinforcement != next.emergency_reinforcement) ||
-                             (config.siege_interception != next.siege_interception);
-        config = next;
-        if (changed) clear_locked();
-    }
-
-    Config get_config() {
-        std::lock_guard<std::mutex> lock(mutex);
-        return config;
-    }
-
-    void clear_locked() {
-        last_siege_turn_key = 0;
-        city_cooldown_ms.clear();
-        assignments.clear();
-    }
-};
-
-inline int32_t hex_dist(uint32_t a, uint32_t b) {
-    if (a > MAX_TILE_ID || b > MAX_TILE_ID) return 9999;
-    const int32_t ax = static_cast<int32_t>(a % GRID_WIDTH);
-    const int32_t ay = static_cast<int32_t>(a / GRID_WIDTH);
-    const int32_t bx = static_cast<int32_t>(b % GRID_WIDTH);
-    const int32_t by = static_cast<int32_t>(b / GRID_WIDTH);
-    const int32_t aq = ax;
-    const int32_t ar = ay - ((ax - (ax & 1)) / 2);
-    const int32_t bq = bx;
-    const int32_t br = by - ((bx - (bx & 1)) / 2);
-    const int32_t dq = aq - bq;
-    const int32_t dr = ar - br;
-    const int32_t ds = -dq - dr;
-    return (std::max)({std::abs(dq), std::abs(dr), std::abs(ds)});
-}
-
-inline int collect_neighbors(uint32_t tile, std::array<uint32_t, 6>& out) {
-    if (tile > MAX_TILE_ID) return 0;
-    const int32_t x = static_cast<int32_t>(tile % GRID_WIDTH);
-    const int32_t y = static_cast<int32_t>(tile / GRID_WIDTH);
-    const int32_t stagger = (x & 1) ? -1 : 1;
-    const int32_t dx[6] = {0, 0, -1, 1, -1, 1};
-    const int32_t dy[6] = {-1, 1, 0, 0, stagger, stagger};
-    int count = 0;
-    for (int i = 0; i < 6; ++i) {
-        const int32_t nx = x + dx[i];
-        const int32_t ny = y + dy[i];
-        if (nx >= 0 && nx < GRID_WIDTH && ny >= 0 && ny < GRID_WIDTH) {
-            out[count++] = static_cast<uint32_t>(ny * GRID_WIDTH + nx);
-        }
-    }
-    return count;
-}
-
-inline bool is_water_kind(uint32_t kind, uint8_t is_water) {
-    return is_water != 0 || kind == 12 || kind == 13 || kind == 14 || kind == 18 || kind == 21 || kind == 24;
-}
-
-inline bool is_impassable_kind(uint32_t kind) {
-    return kind == 0 || kind == 19 || kind == 20 || kind == 22 || kind == 23;
-}
-
-inline bool read_tile(const San14TacticalHostOps* ops, uint32_t tile_id, San14TacticalTile& out) {
-    out = {};
-    out.struct_size = sizeof(out);
-    if (!ops || !ops->get_tile || tile_id > MAX_TILE_ID) return false;
-    return ops->get_tile(ops->ops_context, tile_id, &out) == SAN14_OK;
-}
-
-inline const San14TacticalCity* find_city(const San14TacticalWorld* w, uint32_t city_id) {
-    if (!w || !w->cities || city_id == 0) return nullptr;
-    for (uint32_t i = 0; i < w->city_count; ++i) {
-        if (w->cities[i].city_id == city_id) return &w->cities[i];
-    }
-    return nullptr;
-}
-
-inline const San14TacticalDistrict* find_district(const San14TacticalWorld* w, uint32_t district_id) {
-    if (!w || !w->districts || district_id == 0) return nullptr;
-    for (uint32_t i = 0; i < w->district_count; ++i) {
-        if (w->districts[i].district_id == district_id) return &w->districts[i];
-    }
-    return nullptr;
-}
-
-inline const San14TacticalUnit* find_unit(const San14TacticalWorld* w, uint32_t slot) {
-    if (!w || !w->units || slot == 0) return nullptr;
-    for (uint32_t i = 0; i < w->unit_count; ++i) {
-        if (w->units[i].slot == slot) return &w->units[i];
-    }
-    return nullptr;
-}
-
-inline const San14TacticalFormation* find_formation(const San14TacticalWorld* w, uint32_t formation_id) {
-    if (!w || !w->formations) return nullptr;
-    for (uint32_t i = 0; i < w->formation_count; ++i) {
-        if (w->formations[i].formation_id == formation_id) return &w->formations[i];
-    }
-    return nullptr;
-}
-
-inline bool is_enemy_force(const San14TacticalWorld* w, const San14TacticalHostOps* ops, uint32_t a, uint32_t b) {
-    if (a == 0 || b == 0 || a == b) return false;
-    if (ops && ops->is_enemy_force) return ops->is_enemy_force(ops->ops_context, a, b) != 0;
-    if (!w || !w->treaties || !w->treaty_stride || a >= w->treaty_stride || b >= w->treaty_stride) {
-        return true;
-    }
-    return (w->treaties[a * w->treaty_stride + b] & 0x7fu) == 0;
-}
-
-inline bool is_player_city(const San14TacticalWorld* w, const San14TacticalCity& c) {
-    return (w && !w->is_spectator_mode && w->player_force_id != 0 &&
-            c.force_id == w->player_force_id && c.is_player_direct != 0);
-}
-
-inline bool is_player_unit(const San14TacticalWorld* w, const San14TacticalUnit& u) {
-    return (w && !w->is_spectator_mode && w->player_force_id != 0 &&
-            u.force_id == w->player_force_id && u.is_player_direct != 0);
-}
-
-inline bool is_siege_formation(uint32_t formation_id) {
-    return formation_id == 8 || formation_id == 9 || formation_id == 10;
-}
-
-inline int32_t siege_fire_radius(uint32_t formation_id) {
-    if (formation_id == 10) return 4;
-    if (formation_id == 9) return 2;
-    if (formation_id == 8) return 3;
-    return 1;
-}
-
 inline uint32_t preferred_land_formation(const San14TacticalOfficer& off, int32_t dist) {
     const uint32_t mask = off.land_formation_mask;
-    if (dist <= 4 && (mask & (1u << 2))) return 2;  // 锋矢 / 鱼鳞 / 鹤翼
+    if (dist <= 4 && (mask & (1u << 2))) return 2;
     if (mask & (1u << 1)) return 1;
     if (mask & (1u << 3)) return 3;
     return 1;
@@ -303,23 +132,24 @@ inline uint32_t choose_water_intercept_tile(
     return best;
 }
 
-inline int32_t naval_officer_score(const San14TacticalOfficer& off,const San14TacticalHostOps* ops=nullptr) {
+inline int32_t naval_officer_score(const San14TacticalOfficer& off, const San14TacticalHostOps* ops = nullptr) {
     int32_t score = off.leadership * 2 + off.strength + off.max_troops / 100;
     if (off.naval_formation == 12) score += 300;
     else if (off.naval_formation == 13) score += 260;
     else if (off.naval_formation == 11) score += 140;
     for (int i = 0; i < 5; ++i) {
-        if (off.traits[i] == 27) score += 220;  // 操舵
-        else if (off.traits[i] == 11) score += 120;  // 水战
+        if (off.traits[i] == 27) score += 220;
+        else if (off.traits[i] == 11) score += 120;
     }
-    if(ops&&ops->struct_size>=offsetof(San14TacticalHostOps,get_officer_traits)+sizeof(ops->get_officer_traits)&&ops->get_officer_traits){
+    if (ops && ops->struct_size >= offsetof(San14TacticalHostOps, get_officer_traits) + sizeof(ops->get_officer_traits) &&
+        ops->get_officer_traits) {
         San14OfficerTraits traits{sizeof(traits)};
-        if(ops->get_officer_traits(ops->ops_context,off.officer_id,&traits)==SAN14_OK&&
-           traits.struct_size>=sizeof(traits)&&traits.officer_id==off.officer_id){
-            const uint32_t slots=(std::min)(traits.active_slots,9u);
-            for(uint32_t slot=5;slot<slots;++slot){
-                if(traits.ids[slot]==27)score+=220;
-                else if(traits.ids[slot]==11)score+=120;
+        if (ops->get_officer_traits(ops->ops_context, off.officer_id, &traits) == SAN14_OK &&
+            traits.struct_size >= sizeof(traits) && traits.officer_id == off.officer_id) {
+            const uint32_t slots = (std::min)(traits.active_slots, 9u);
+            for (uint32_t slot = 5; slot < slots; ++slot) {
+                if (traits.ids[slot] == 27) score += 220;
+                else if (traits.ids[slot] == 11) score += 120;
             }
         }
     }
@@ -448,30 +278,35 @@ inline void run_emergency_recall_and_relief(
     State& st
 ) {
     if (!w || !ops) return;
-    // 1. Recall idle distant field armies when home city is threatened.
     if (ops->return_unit) {
         for (uint32_t i = 0; i < w->unit_count; ++i) {
             const auto& u = w->units[i];
             if (u.kind != 1 || u.troops < EMERGENCY_RECALL_TROOP_FLOOR || is_player_unit(w, u)) continue;
+            if (!force_has_module(st, w, ops, u.force_id, SAN14_TACTICAL_MOD_LEGACY_REINFORCE)) continue;
             if (u.order_code == 11 || u.order_code == 12 || u.task_locked) continue;
+            // Do not pull back units actively managed by BT defensive/siege modules.
+            const auto oit = st.order_mem.find(u.slot);
+            if (oit != st.order_mem.end() && oit->second.mod) continue;
             for (uint32_t c = 0; c < w->city_count; ++c) {
                 const auto& home = w->cities[c];
                 if (home.home_global_id != u.home_global_id || home.force_id != u.force_id) continue;
                 if (hex_dist(u.tile_id, home.tile_id) <= LAND_DEFENSE_ENGAGE_RADIUS) break;
                 const int32_t threat = emergency_threat_for_city(w, ops, home);
                 if (threat >= EMERGENCY_RECALL_MIN_THREAT && home.troops < threat) {
-                    ops->return_unit(ops->ops_context, u.slot, 0, 0, 1);
+                    if (ops->return_unit(ops->ops_context, u.slot, 0, 0, 1) == SAN14_OK) {
+                        record_telemetry(st, u.force_id, SAN14_TACTICAL_MOD_LEGACY_REINFORCE);
+                    }
                 }
                 break;
             }
         }
     }
 
-    // 2. Forced adjacent reserve relief when a frontier AI city is outnumbered.
     if (!ops->deploy_unit || !ops->list_city_officers) return;
     for (uint32_t c = 0; c < w->city_count; ++c) {
         const auto& victim = w->cities[c];
         if (is_player_city(w, victim)) continue;
+        if (!force_has_module(st, w, ops, victim.force_id, SAN14_TACTICAL_MOD_LEGACY_REINFORCE)) continue;
         const int32_t threat = emergency_threat_for_city(w, ops, victim);
         if (threat < EMERGENCY_RECALL_MIN_THREAT || victim.troops >= threat) continue;
 
@@ -520,6 +355,7 @@ inline void run_emergency_recall_and_relief(
                     dep.unit_slot, off.officer_id, victim.city_id, victim.force_id,
                     threats[0].unit->slot, SAN14_TACTICAL_INVALID_TILE_ID, false, false
                 };
+                record_telemetry(st, victim.force_id, SAN14_TACTICAL_MOD_LEGACY_REINFORCE);
                 break;
             }
         }
@@ -542,12 +378,16 @@ inline void mobilize_city_waves(
     for (uint32_t c = 0; c < w->city_count; ++c) {
         const auto& city = w->cities[c];
         if (is_player_city(w, city)) continue;
+        const bool city_naval = enable_naval && force_has_module(st, w, ops, city.force_id, SAN14_TACTICAL_MOD_LEGACY_NAVAL);
+        const bool city_siege = enable_siege && force_has_module(st, w, ops, city.force_id, SAN14_TACTICAL_MOD_LEGACY_SIEGE_INT);
+        if (!city_naval && !city_siege) continue;
+
         const auto* dist = find_district(w, city.district_id);
         if (!dist || dist->remaining_commands == 0) continue;
 
-        auto threats = collect_city_threats(w, ops, city, enable_naval, enable_siege);
+        auto threats = collect_city_threats(w, ops, city, city_naval, city_siege);
         threats.erase(std::remove_if(threats.begin(), threats.end(), [&](const ThreatDesc& td) {
-            return !(enable_naval && td.naval) && !(enable_siege && td.siege);
+            return !(city_naval && td.naval) && !(city_siege && td.siege);
         }), threats.end());
         if (threats.empty()) continue;
 
@@ -561,7 +401,8 @@ inline void mobilize_city_waves(
         const SupplyState sup = compute_supply_state(w, city);
         if (sup.ratio < DEFENSE_SUPPLY_RATIO_MIN) continue;
 
-        const int32_t reserve = st.config.emergency_reinforcement
+        const bool use_emerg = force_has_module(st, w, ops, city.force_id, SAN14_TACTICAL_MOD_LEGACY_REINFORCE);
+        const int32_t reserve = use_emerg
             ? compute_city_reserve_floor(w, ops, city)
             : LOCAL_DEFENSE_CITY_RESERVE;
         int32_t surplus = city.troops - reserve;
@@ -577,8 +418,8 @@ inline void mobilize_city_waves(
         const bool lead_naval = threats[0].naval;
         std::sort(offs.begin(), offs.begin() + n_offs, [&](const San14TacticalOfficer& a, const San14TacticalOfficer& b) {
             if (lead_naval) {
-                const int32_t sa = naval_officer_score(a,ops);
-                const int32_t sb = naval_officer_score(b,ops);
+                const int32_t sa = naval_officer_score(a, ops);
+                const int32_t sb = naval_officer_score(b, ops);
                 if (sa != sb) return sa > sb;
             }
             if (a.max_troops != b.max_troops) return a.max_troops > b.max_troops;
@@ -649,6 +490,7 @@ inline void mobilize_city_waves(
                     res.unit_slot, off.officer_id, city.city_id, city.force_id,
                     td.unit->slot, station, td.naval, td.siege
                 };
+                record_telemetry(st, city.force_id, td.naval ? SAN14_TACTICAL_MOD_LEGACY_NAVAL : SAN14_TACTICAL_MOD_LEGACY_SIEGE_INT);
             }
         }
         if (launched > 0) {
@@ -658,16 +500,85 @@ inline void mobilize_city_waves(
 }
 
 inline San14Result SAN14_MOD_CALL on_eval_target_strength(
-    void* plugin_context, const San14TacticalWorld* w, const San14TacticalHostOps*,
-    uint32_t, uint32_t target_city_id, int32_t base_strength, int32_t, int32_t* out_corrected_strength
+    void* plugin_context, const San14TacticalWorld* w, const San14TacticalHostOps* ops,
+    uint32_t district_id, uint32_t target_city_id, int32_t base_strength, int32_t, int32_t* out_corrected_strength
 ) {
     if (!plugin_context || !w || !out_corrected_strength) return SAN14_E_INVALID_ARGUMENT;
     auto* st = static_cast<State*>(plugin_context);
-    const auto cfg = st->get_config();
-    if (!cfg.emergency_reinforcement) return SAN14_E_UNSUPPORTED;
+    std::lock_guard<std::mutex> lock(st->mutex);
+    cache_world_metadata(*st, w);
 
+    const auto* dist = find_district(w, district_id);
+    const uint32_t att_force = dist ? dist->force_id : 0u;
     const auto* target = find_city(w, target_city_id);
     if (!target) return SAN14_E_UNSUPPORTED;
+
+    const bool do_siegeplan = (att_force != 0) && force_has_module(*st, w, ops, att_force, SAN14_TACTICAL_MOD_SIEGEPLAN);
+    const bool do_legacy = (att_force != 0)
+        ? force_has_module(*st, w, ops, att_force, SAN14_TACTICAL_MOD_LEGACY_REINFORCE)
+        : (st->config.emergency_reinforcement && !st->ab.active);
+
+    if (do_siegeplan) {
+        const auto& p = st->params;
+        float ratio = 1.0f;
+        if (ops && ops->struct_size >= offsetof(San14TacticalHostOps, eval_area_bonus) + sizeof(ops->eval_area_bonus) &&
+            ops->eval_area_bonus && target->tile_id <= MAX_TILE_ID && target->force_id != 0 && att_force != target->force_id) {
+            float md = 0.0f, ma = 0.0f;
+            int32_t nh = 0;
+            const int32_t cx = static_cast<int32_t>(target->tile_id % GRID_WIDTH);
+            const int32_t cy = static_cast<int32_t>(target->tile_id / GRID_WIDTH);
+            for (int32_t dy = -3; dy <= 3; ++dy) {
+                for (int32_t dx = -3; dx <= 3; ++dx) {
+                    const int32_t nx = cx + dx, ny = cy + dy;
+                    if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_WIDTH) continue;
+                    const uint32_t tid = static_cast<uint32_t>(ny * GRID_WIDTH + nx);
+                    const int32_t dd = hex_dist(tid, target->tile_id);
+                    if (dd < 1 || dd > 3) continue;
+                    San14TacticalTile tile{};
+                    if (ops->get_tile && (!read_tile(ops, tid, tile) || tile.area_id == 0)) continue;
+                    float a1 = 0.0f, a2 = 0.0f;
+                    int32_t s1 = 0, s2 = 0;
+                    if (ops->eval_area_bonus(ops->ops_context, tid, target->force_id, &a1, &s1) != SAN14_OK ||
+                        ops->eval_area_bonus(ops->ops_context, tid, att_force, &a2, &s2) != SAN14_OK) continue;
+                    if (a1 >= 0.5f && a1 <= 4.0f && a2 >= 0.5f && a2 <= 4.0f) {
+                        md += a1;
+                        ma += a2;
+                        ++nh;
+                    }
+                }
+            }
+            if (nh > 0) {
+                md /= static_cast<float>(nh);
+                ma /= static_cast<float>(nh);
+                const float md_f = 1.0f + 0.77f * (md - 1.0f);
+                const float ma_f = (std::max)(ma, 1.0f + 0.20f * (md - 1.0f));
+                if (ma_f > 0.01f) {
+                    const float min_r = static_cast<float>(p.siege_fu_min_pct) / 100.0f;
+                    const float max_r = static_cast<float>(p.siege_fu_max_pct) / 100.0f;
+                    ratio = (std::max)(min_r, (std::min)(max_r, md_f / ma_f));
+                }
+            }
+        }
+
+        int32_t relief_sum = 0;
+        for (uint32_t i = 0; i < w->city_count; ++i) {
+            const auto& c = w->cities[i];
+            if (c.city_id == target->city_id || c.force_id != target->force_id || c.gold <= 0 || c.troops <= 5000) continue;
+            const int32_t spare = c.troops - 5000;
+            const int32_t d = hex_dist(c.tile_id, target->tile_id);
+            int32_t weight = 0;
+            if (d <= 18) weight = p.siege_relief_w18;
+            else if (d <= 30) weight = p.siege_relief_w30;
+            else if (d <= 45) weight = p.siege_relief_w45;
+            relief_sum += (spare * weight) / 100;
+        }
+        relief_sum = (std::min)(relief_sum, p.siege_relief_cap);
+        *out_corrected_strength = static_cast<int32_t>(static_cast<float>(base_strength) * ratio + 0.5f) + relief_sum;
+        record_telemetry(*st, att_force, SAN14_TACTICAL_MOD_SIEGEPLAN);
+        return SAN14_OK;
+    }
+
+    if (!do_legacy) return SAN14_E_UNSUPPORTED;
 
     int32_t supplement = 0;
     for (uint32_t i = 0; i < w->unit_count; ++i) {
@@ -698,16 +609,38 @@ inline San14Result SAN14_MOD_CALL on_eval_reserve(
 ) {
     if (!plugin_context || !w || !out_new_reserve || !out_new_quota) return SAN14_E_INVALID_ARGUMENT;
     auto* st = static_cast<State*>(plugin_context);
-    if (!st->get_config().emergency_reinforcement) return SAN14_E_UNSUPPORTED;
+    std::lock_guard<std::mutex> lock(st->mutex);
 
     const auto* city = find_city(w, source_city_id);
     if (!city) return SAN14_E_UNSUPPORTED;
 
+    const bool do_siegeplan = force_has_module(*st, w, ops, city->force_id, SAN14_TACTICAL_MOD_SIEGEPLAN);
+    const bool do_legacy = force_has_module(*st, w, ops, city->force_id, SAN14_TACTICAL_MOD_LEGACY_REINFORCE);
+    if (!do_siegeplan && !do_legacy) return SAN14_E_UNSUPPORTED;
+
+    const int32_t threat = emergency_threat_for_city(w, ops, *city);
+    if (do_siegeplan) {
+        int32_t new_reserve = current_base_reserve;
+        if (threat == 0) {
+            new_reserve = (current_base_reserve * st->params.siege_reserve_ratio_pct) / 100;
+        } else if (do_legacy) {
+            new_reserve = (std::max)(current_base_reserve, EMERGENCY_CAPITAL_FLOOR);
+        }
+        int32_t new_quota = current_quota;
+        if (do_legacy && threat == 0 && city->gold >= EMERGENCY_WEALTH_GOLD_MIN &&
+            city->food >= EMERGENCY_WEALTH_FOOD_MIN && city->troops > new_reserve) {
+            const int32_t avail = city->troops - new_reserve;
+            new_quota = (std::min)(EMERGENCY_SURPLUS_QUOTA_CAP, (std::max)(current_quota, avail));
+        }
+        *out_new_reserve = new_reserve;
+        *out_new_quota = new_quota;
+        record_telemetry(*st, city->force_id, SAN14_TACTICAL_MOD_SIEGEPLAN);
+        return SAN14_OK;
+    }
+
     const int32_t floor = compute_city_reserve_floor(w, ops, *city);
     const int32_t new_reserve = (std::max)(current_base_reserve, floor);
     int32_t new_quota = current_quota;
-
-    const int32_t threat = emergency_threat_for_city(w, ops, *city);
     if (threat == 0 && city->gold >= EMERGENCY_WEALTH_GOLD_MIN &&
         city->food >= EMERGENCY_WEALTH_FOOD_MIN && city->troops > new_reserve) {
         const int32_t avail = city->troops - new_reserve;
@@ -719,26 +652,25 @@ inline San14Result SAN14_MOD_CALL on_eval_reserve(
 }
 
 inline San14Result SAN14_MOD_CALL on_eval_command_rollback(
-    void* plugin_context, uint32_t, uint32_t remaining_commands, int32_t* out_force_skip
+    void* plugin_context, uint32_t district_id, uint32_t remaining_commands, int32_t* out_force_skip
 ) {
-    if (!plugin_context || !out_force_skip) return SAN14_E_INVALID_ARGUMENT;
-    auto* st = static_cast<State*>(plugin_context);
-    if (!st->get_config().emergency_reinforcement) return SAN14_E_UNSUPPORTED;
-    *out_force_skip = (remaining_commands == 0) ? 1 : 0;
-    return SAN14_OK;
+    return on_eval_command_rollback_ex(plugin_context, nullptr, nullptr, district_id, 0, remaining_commands, out_force_skip);
 }
 
 inline San14Result SAN14_MOD_CALL on_eval_transport_include(
-    void* plugin_context, const San14TacticalWorld* w, const San14TacticalHostOps*,
+    void* plugin_context, const San14TacticalWorld* w, const San14TacticalHostOps* ops,
     uint32_t unit_slot, uint32_t dest_city_id, int32_t* out_include
 ) {
     if (!plugin_context || !w || !out_include) return SAN14_E_INVALID_ARGUMENT;
     auto* st = static_cast<State*>(plugin_context);
-    if (!st->get_config().emergency_reinforcement) return SAN14_E_UNSUPPORTED;
+    std::lock_guard<std::mutex> lock(st->mutex);
 
     const auto* unit = find_unit(w, unit_slot);
     const auto* city = find_city(w, dest_city_id);
     if (!unit || !city) return SAN14_E_UNSUPPORTED;
+    if (!force_has_module(*st, w, ops, city->force_id, SAN14_TACTICAL_MOD_LEGACY_REINFORCE)) {
+        return SAN14_E_UNSUPPORTED;
+    }
     if (unit->kind == 2 && hex_dist(unit->tile_id, city->tile_id) > EMERGENCY_DISTANT_TRANSPORT_HEXES) {
         *out_include = 0;
         return SAN14_OK;
@@ -755,7 +687,10 @@ inline San14Result SAN14_MOD_CALL on_eval_unit_return(
     *out_allow = 1;
     auto* st = static_cast<State*>(plugin_context);
     std::lock_guard<std::mutex> lock(st->mutex);
-    if (!st->config.emergency_reinforcement) return SAN14_OK;
+    const auto* unit = find_unit(w, unit_slot);
+    if (!unit || !force_has_module(*st, w, ops, unit->force_id, SAN14_TACTICAL_MOD_LEGACY_REINFORCE)) {
+        return SAN14_OK;
+    }
     const auto it = st->assignments.find(unit_slot);
     if (it == st->assignments.end()) return SAN14_OK;
     const auto* city = find_city(w, it->second.city_id);
@@ -773,9 +708,11 @@ inline San14Result SAN14_MOD_CALL on_eval_retreat(
     *out_override = -1;
     auto* st = static_cast<State*>(plugin_context);
     std::lock_guard<std::mutex> lock(st->mutex);
-    if (!st->config.emergency_reinforcement || native_result != 1) return SAN14_OK;
+    if (native_result != 1) return SAN14_OK;
     const auto* unit = find_unit(w, unit_slot);
     if (!unit || unit->troops < DEFENSE_SORTIE_MIN_TROOPS) return SAN14_OK;
+    if (!force_has_module(*st, w, ops, unit->force_id, SAN14_TACTICAL_MOD_LEGACY_REINFORCE)) return SAN14_OK;
+
     const auto it = st->assignments.find(unit_slot);
     if (it != st->assignments.end()) {
         const auto* city = find_city(w, it->second.city_id);
@@ -800,13 +737,15 @@ inline San14Result SAN14_MOD_CALL on_select_defense_officer(
     *out_override_target_tile_id = planned_target_tile_id;
 
     auto* st = static_cast<State*>(plugin_context);
-    const auto cfg = st->get_config();
-    if (!cfg.naval_defense && !cfg.siege_interception) return SAN14_E_UNSUPPORTED;
-
+    std::lock_guard<std::mutex> lock(st->mutex);
     const auto* city = find_city(w, source_city_id);
     if (!city || is_player_city(w, *city) || candidate_count == 0) return SAN14_OK;
 
-    const bool water_threat = cfg.naval_defense &&
+    const bool do_naval = force_has_module(*st, w, ops, city->force_id, SAN14_TACTICAL_MOD_LEGACY_NAVAL);
+    const bool do_siege = force_has_module(*st, w, ops, city->force_id, SAN14_TACTICAL_MOD_LEGACY_SIEGE_INT);
+    if (!do_naval && !do_siege) return SAN14_E_UNSUPPORTED;
+
+    const bool water_threat = do_naval &&
         assess_water_route(ops, city->tile_id, planned_target_tile_id);
 
     uint32_t best_id = 0;
@@ -816,7 +755,7 @@ inline San14Result SAN14_MOD_CALL on_select_defense_officer(
         if (ops->get_officer(ops->ops_context, candidate_officer_ids[i], &off) != SAN14_OK) continue;
         if (off.has_active_unit || off.has_active_command) continue;
         const int32_t score = water_threat
-            ? naval_officer_score(off,ops)
+            ? naval_officer_score(off, ops)
             : (off.leadership * 2 + off.strength + off.max_troops / 100);
         if (score > best_score) {
             best_score = score;
@@ -839,28 +778,34 @@ inline San14Result SAN14_MOD_CALL on_filter_order_target(
     if (!plugin_context || !w || !ops || !out_proposal) return SAN14_E_INVALID_ARGUMENT;
     out_proposal->decision = SAN14_TACTICAL_ORDER_KEEP;
     auto* st = static_cast<State*>(plugin_context);
-    const auto cfg = st->get_config();
-    if (!cfg.any_enabled()) return SAN14_E_UNSUPPORTED;
+    std::lock_guard<std::mutex> lock(st->mutex);
 
     const auto* unit = find_unit(w, unit_slot);
     if (!unit || unit->kind != 1 || unit->troops < DEFENSE_SORTIE_MIN_TROOPS || is_player_unit(w, *unit)) {
         return SAN14_OK;
     }
+    if (!force_has_module(*st, w, ops, unit->force_id, SAN14_TACTICAL_MOD_LEGACY_SIEGE_INT)) {
+        return st->config.any_enabled() ? SAN14_OK : SAN14_E_UNSUPPORTED;
+    }
+    // Yield if a BT module (e.g., gate / stance) holds this unit.
+    const auto oit = st->order_mem.find(unit_slot);
+    if (oit != st->order_mem.end() && oit->second.mod && oit->second.owner != OWNER_NONE) {
+        return SAN14_OK;
+    }
 
-    if (cfg.siege_interception) {
-        for (uint32_t i = 0; i < w->unit_count; ++i) {
-            const auto& enemy = w->units[i];
-            if (enemy.kind != 1 || enemy.troops <= 0 || !is_siege_formation(enemy.land_formation)) continue;
-            if (!is_enemy_force(w, ops, enemy.force_id, unit->force_id)) continue;
-            if (hex_dist(unit->tile_id, enemy.tile_id) <= LAND_DEFENSE_ENGAGE_RADIUS) {
-                std::fill_n(out_proposal->waypoints, 5, SAN14_TACTICAL_INVALID_TILE_ID);
-                out_proposal->decision = SAN14_TACTICAL_ORDER_REPLACE_ROUTE;
-                out_proposal->order_code = 7;
-                out_proposal->target_type = 0x1b;
-                out_proposal->target_id = static_cast<int32_t>(enemy.slot);
-                out_proposal->refresh_route = 1;
-                return SAN14_OK;
-            }
+    for (uint32_t i = 0; i < w->unit_count; ++i) {
+        const auto& enemy = w->units[i];
+        if (enemy.kind != 1 || enemy.troops <= 0 || !is_siege_formation(enemy.land_formation)) continue;
+        if (!is_enemy_force(w, ops, enemy.force_id, unit->force_id)) continue;
+        if (hex_dist(unit->tile_id, enemy.tile_id) <= LAND_DEFENSE_ENGAGE_RADIUS) {
+            std::fill_n(out_proposal->waypoints, 5, SAN14_TACTICAL_INVALID_TILE_ID);
+            out_proposal->decision = SAN14_TACTICAL_ORDER_REPLACE_ROUTE;
+            out_proposal->order_code = 7;
+            out_proposal->target_type = 0x1b;
+            out_proposal->target_id = static_cast<int32_t>(enemy.slot);
+            out_proposal->refresh_route = 1;
+            record_telemetry(*st, unit->force_id, SAN14_TACTICAL_MOD_LEGACY_SIEGE_INT);
+            return SAN14_OK;
         }
     }
     return SAN14_OK;
@@ -873,20 +818,21 @@ inline void SAN14_MOD_CALL on_strategy_update(
     if (!plugin_context || !w || !ops) return;
     auto* st = static_cast<State*>(plugin_context);
     std::lock_guard<std::mutex> lock(st->mutex);
+    cache_world_metadata(*st, w);
     const auto cfg = st->config;
-    if (!cfg.any_enabled()) return;
+    if (!cfg.any_legacy3() && !st->ab.active) return;
 
     if (phase == SAN14_TACTICAL_PHASE_PLANNING) {
-        if (cfg.emergency_reinforcement) {
+        if (cfg.emergency_reinforcement || st->ab.active) {
             run_emergency_recall_and_relief(w, ops, *st);
         }
-        if (cfg.naval_defense || cfg.siege_interception) {
-            mobilize_city_waves(w, ops, *st, cfg.naval_defense, cfg.siege_interception);
+        if (cfg.naval_defense || cfg.siege_interception || st->ab.active) {
+            mobilize_city_waves(w, ops, *st, cfg.naval_defense || st->ab.active, cfg.siege_interception || st->ab.active);
         }
         return;
     }
 
-    if (phase == SAN14_TACTICAL_PHASE_POST_PLANNING && cfg.siege_interception) {
+    if (phase == SAN14_TACTICAL_PHASE_POST_PLANNING && (cfg.siege_interception || st->ab.active)) {
         if (w->day != 1 && w->day != 11 && w->day != 21) return;
         const uint32_t turn_key = w->year * 10000u + w->month * 100u + w->day;
         if (st->last_siege_turn_key == turn_key) return;
@@ -900,6 +846,7 @@ inline void SAN14_MOD_CALL on_reset(void* plugin_context) {
     auto* st = static_cast<State*>(plugin_context);
     std::lock_guard<std::mutex> lock(st->mutex);
     st->clear_locked();
+    st->refresh_ab_locked();
 }
 
 inline San14TacticalAiPolicy make_policy(State& state) {
@@ -917,6 +864,12 @@ inline San14TacticalAiPolicy make_policy(State& state) {
     p.on_eval_draft_reserve = &on_eval_reserve;
     p.on_eval_command_rollback = &on_eval_command_rollback;
     p.on_select_defense_officer = &on_select_defense_officer;
+    p.on_daily_tactical_tick = &on_daily_tactical_tick;
+    p.on_eval_intercept_deploy = &on_eval_intercept_deploy;
+    p.on_eval_intercept_gate = &on_eval_intercept_gate;
+    p.on_eval_command_rollback_ex = &on_eval_command_rollback_ex;
+    p.on_post_order_target = &on_post_order_target;
+    p.on_query_telemetry = &on_query_telemetry;
     return p;
 }
 

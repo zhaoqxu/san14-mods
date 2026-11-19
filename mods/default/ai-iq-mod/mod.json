@@ -2,10 +2,16 @@
   "schema_version": 1,
   "id": "ai-iq-mod",
   "name": "电脑智商优化",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "author": "清都jsl",
   "author_url": "https://space.bilibili.com/3690994744691528",
-  "description": "面向电脑势力的战术与外交AI增强：优化攻城阵型配兵、动态同盟与敌对主敌评估、智能水域防御调度、应急增援重调以及敌方攻城器械时间窗截击及电脑施政自动排序。",
+  "contributors": [
+    {
+      "name": "coocookie123",
+      "url": "https://github.com/coocookie123/SAN14-Optimizer-Launcher"
+    }
+  ],
+  "description": "面向电脑势力的战术、行为树与外交AI增强：融合清都jsl原有攻城配兵、动态外交、水域防御、应急增援、器械截击与施政排序，并移植增强coocookie123的出兵编成、集结齐进、会战协同、野战撤退、雁行站位、城下迎击、攻城评估与守关8项模块。",
   "entry": {
     "type": "native",
     "path": "bin/win-x64/ai_iq.dll",

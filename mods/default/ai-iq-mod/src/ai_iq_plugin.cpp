@@ -12,6 +12,7 @@ bool active = false;
 bool diplomacy_registered = false;
 bool tactical_registered = false;
 bool government_registered = false;
+bool tactical_rule_enabled = false;
 
 companion_mod::diplomacy_policy::State diplomacy_state;
 companion_mod::tactical_ai_policy::State tactical_state;
@@ -28,19 +29,34 @@ struct Feature {
     const char* help;
     const char* rule;
     Service service;
+    int32_t default_value;
+    const char* category;
 };
 
 const Feature features[] = {
-    {"fix_ai_gate_siege", u8"优化电脑攻城编组：更常使用攻城器械，并提高单支器械队兵力", u8"提高电脑单一出征队列上限并优化攻城队配比。", "ai.siege.composition", Service::Rule},
-    {"dynamic_diplomacy", u8"动态外交（类似群雄策 MOD）：电脑会选择一个主要敌人进攻，并尽量与其他势力结盟", u8"依据威胁与敌意动态判定主敌；对共敌势力放宽同盟与停战条件，对互敌势力提高结盟阻力。", "diplomacy.ai.dynamic", Service::Diplomacy},
-    {"smart_district_ai", u8"优化孙权等南方势力的水战逻辑：防守时主动出击在水上解决战斗", u8"检测水域来袭与河道威胁，择优推举水战/操舵武将并调度舰队拦截或机动防御。", "ai.tactical.policy", Service::Tactical},
-    {"emergency_reinforcement_ai", u8"优化电脑出兵、回防和邻城救援逻辑", u8"重估支援兵力并保障前线安全留兵，在战局吃紧时触发远征召回、邻城强援及防止过早撤退。", "ai.tactical.policy", Service::Tactical},
-    {"siege_interception_ai", u8"电脑防守时会主动出击攻击攻城器械", u8"基于行军时间窗口预警敌方攻城器械并统筹前线迎击。", "ai.tactical.policy", Service::Tactical},
-    {"weighted_government_auto_assign", u8"优化电脑施政", u8"根据兵力、战线、粮草和水域威胁调整自动施政排序。", "government.ai.optimized", Service::Government}
+    {"fix_ai_gate_siege", u8"优化电脑攻城编组：更常使用攻城器械，并提高单支器械队兵力", u8"提高电脑单一出征队列上限并优化攻城队配比。", "ai.siege.composition", Service::Rule, 0, u8"常规"},
+    {"dynamic_diplomacy", u8"动态外交（类似群雄策 MOD）：电脑会选择一个主要敌人进攻，并尽量与其他势力结盟", u8"依据威胁与敌意动态判定主敌；对共敌势力放宽同盟与停战条件，对互敌势力提高结盟阻力。", "diplomacy.ai.dynamic", Service::Diplomacy, 0, u8"常规"},
+    {"smart_district_ai", u8"优化孙权等南方势力的水战逻辑：防守时主动出击在水上解决战斗", u8"检测水域来袭与河道威胁，择优推举水战/操舵武将并调度舰队拦截或机动防御。", "ai.tactical.policy", Service::Tactical, 0, u8"常规"},
+    {"emergency_reinforcement_ai", u8"优化电脑出兵、回防和邻城救援逻辑", u8"重估支援兵力并保障前线安全留兵，在战局吃紧时触发远征召回、邻城强援及防止过早撤退。", "ai.tactical.policy", Service::Tactical, 0, u8"常规"},
+    {"siege_interception_ai", u8"电脑防守时会主动出击攻击攻城器械", u8"基于行军时间窗口预警敌方攻城器械并统筹前线迎击。", "ai.tactical.policy", Service::Tactical, 0, u8"常规"},
+    {"weighted_government_auto_assign", u8"优化电脑施政", u8"根据兵力、战线、粮草和水域威胁调整自动施政排序。", "government.ai.optimized", Service::Government, 0, u8"常规"},
+    {"bt_deploy", u8"出兵编成：主力分兵与侧翼锋矢", u8"迎击出兵时按强将数量平分兵力并自动配属锋矢侧翼与雁行辅助，避免单将满兵孤军送死。", "ai.tactical.policy", Service::Tactical, 1, u8"行为树优化"},
+    {"bt_rally", u8"集结齐进：迎击会合与攻城同步防落单", u8"迎击与攻城多路军势同步会合、近处晚出与防先头部队落单送死，绝不往回拉扯。", "ai.tactical.policy", Service::Tactical, 1, u8"行为树优化"},
+    {"bt_engage", u8"会战协同：分流集火与贴敌还手", u8"近战按负载分流避免扎堆、锋矢优先突击远程/器械，并令贴敌待命部队立即还手。", "ai.tactical.policy", Service::Tactical, 1, u8"行为树优化"},
+    {"bt_retreat", u8"野战撤退：劣势整军势撤退与同向联动", u8"迎击军势在野外被敌力明显压制时整军势协同撤退并统一回城目标，避免各自溃灭。", "ai.tactical.policy", Service::Tactical, 1, u8"行为树优化"},
+    {"bt_stance", u8"雁行站位：保持两格射程与友军掩护", u8"电脑雁行部队自动保持2格射击距离、被贴脸时优先撤至友军盾后安全格。", "ai.tactical.policy", Service::Tactical, 1, u8"行为树优化"},
+    {"bt_walls", u8"城下迎击：器械拦截、半渡而击、水战守港与援军协防", u8"被围城下放开迎击限制，整合水上战力折算、半渡而击、港口交换比决策与援军留守。", "ai.tactical.policy", Service::Tactical, 1, u8"行为树优化"},
+    {"bt_siegeplan", u8"攻城评估：援军府分折算、先占周边府与防断粮", u8"攻城决策折算邻城援军与府加成、兵力不足不强攻，并在攻城前先占周边府及保护粮道。", "ai.tactical.policy", Service::Tactical, 1, u8"行为树优化"},
+    {"bt_gate", u8"守关调度：关后雁行布防、近战回城与隔关撤退豁免", u8"受攻关隘仅派雁行据关射击、阻止关后排队与跨关送死，并豁免隔关不可达敌军触发的误撤退。", "ai.tactical.policy", Service::Tactical, 1, u8"行为树优化"}
 };
 constexpr size_t feature_count = sizeof(features) / sizeof(features[0]);
-static_assert(feature_count == 6, "AI IQ mod's supported feature set");
+static_assert(feature_count == 14, "AI IQ mod's 6 legacy + 8 BT module feature set");
 bool applied[feature_count]{};
+
+bool eval_disable_global_rules() {
+    const auto v = companion_mod::tactical_ai_policy::read_env_ascii("SAN14_AI_EVAL_DISABLE_GLOBAL");
+    return v == "1" || v == "true" || v == "TRUE";
+}
 
 bool government_available() {
     return host && host->struct_size >= offsetof(San14HostApi, government) + sizeof(host->government) &&
@@ -74,6 +90,14 @@ companion_mod::tactical_ai_policy::Config tactical_config_with(size_t override_i
         if (std::strcmp(features[i].key, "smart_district_ai") == 0) cfg.naval_defense = true;
         else if (std::strcmp(features[i].key, "emergency_reinforcement_ai") == 0) cfg.emergency_reinforcement = true;
         else if (std::strcmp(features[i].key, "siege_interception_ai") == 0) cfg.siege_interception = true;
+        else if (std::strcmp(features[i].key, "bt_deploy") == 0) cfg.bt_deploy = true;
+        else if (std::strcmp(features[i].key, "bt_rally") == 0) cfg.bt_rally = true;
+        else if (std::strcmp(features[i].key, "bt_engage") == 0) cfg.bt_engage = true;
+        else if (std::strcmp(features[i].key, "bt_retreat") == 0) cfg.bt_retreat = true;
+        else if (std::strcmp(features[i].key, "bt_stance") == 0) cfg.bt_stance = true;
+        else if (std::strcmp(features[i].key, "bt_walls") == 0) cfg.bt_walls = true;
+        else if (std::strcmp(features[i].key, "bt_siegeplan") == 0) cfg.bt_siegeplan = true;
+        else if (std::strcmp(features[i].key, "bt_gate") == 0) cfg.bt_gate = true;
     }
     return cfg;
 }
@@ -108,17 +132,19 @@ San14Result apply(size_t index, bool value) {
     if (feature.service == Service::Tactical) {
         const auto prev_cfg = tactical_config_with(feature_count, false);
         const auto next_cfg = tactical_config_with(index, value);
+        const bool need_policy = next_cfg.any_enabled() || tactical_state.ab.active;
         if (value) {
             const auto ready = ensure_policy(Service::Tactical);
             if (ready != SAN14_OK) return ready;
         }
         tactical_state.set_config(next_cfg);
-        if (prev_cfg.any_enabled() != next_cfg.any_enabled()) {
-            const auto rule_res = host->rules.set_bool(host->host_context, sv(feature.rule), next_cfg.any_enabled() ? 1 : 0);
+        if (tactical_rule_enabled != need_policy) {
+            const auto rule_res = host->rules.set_bool(host->host_context, sv(feature.rule), need_policy ? 1 : 0);
             if (rule_res != SAN14_OK) {
                 tactical_state.set_config(prev_cfg);
                 return rule_res;
             }
+            tactical_rule_enabled = need_policy;
         }
         applied[index] = value;
         return SAN14_OK;
@@ -153,7 +179,17 @@ San14Result SAN14_MOD_CALL changed(void*, San14StringView key, int32_t value) {
 
 San14Result SAN14_MOD_CALL load(San14ModContext*) {
     for (const auto& feature : features) {
-        const San14BoolSetting spec{sizeof(spec), sv(feature.key), sv(feature.label), sv(feature.help), 0, changed, nullptr, sv(u8"常规"), 0};
+        const San14BoolSetting spec{
+            sizeof(spec),
+            sv(feature.key),
+            sv(feature.label),
+            sv(feature.help),
+            feature.default_value,
+            changed,
+            nullptr,
+            sv(feature.category),
+            0
+        };
         const auto result = host->settings.register_bool(host->host_context, &spec);
         if (result != SAN14_OK) return result;
     }
@@ -162,13 +198,34 @@ San14Result SAN14_MOD_CALL load(San14ModContext*) {
 
 San14Result SAN14_MOD_CALL enable(San14ModContext*) {
     active = true;
+    tactical_state.set_config(tactical_config_with(feature_count, false));
+    const bool suppress_global = eval_disable_global_rules();
+
     for (size_t i = 0; i < feature_count; ++i) {
         int32_t value = 0;
         const auto result = host->settings.get_bool(host->host_context, sv(features[i].key), &value);
         if (result != SAN14_OK) return result;
+        if (suppress_global && features[i].service != Service::Tactical) {
+            value = 0;
+        }
         if (value) {
             const auto applied_result = apply(i, true);
-            if (applied_result != SAN14_OK) return applied_result;
+            if (applied_result != SAN14_OK) {
+                if (applied_result == SAN14_E_UNSUPPORTED && features[i].default_value != 0) {
+                    continue;  // Graceful degradation on older Hosts/Adapters lacking tactical_ai.
+                }
+                return applied_result;
+            }
+        }
+    }
+
+    // If an A/B harness env override is active, ensure the tactical policy is registered
+    // even when settings.ini leaves individual toggles off.
+    if (tactical_state.ab.active && !tactical_registered && tactical_ai_available()) {
+        if (ensure_policy(Service::Tactical) == SAN14_OK && !tactical_rule_enabled) {
+            if (host->rules.set_bool(host->host_context, sv("ai.tactical.policy"), 1) == SAN14_OK) {
+                tactical_rule_enabled = true;
+            }
         }
     }
     return SAN14_OK;
@@ -186,6 +243,13 @@ San14Result SAN14_MOD_CALL disable(San14ModContext*) {
         if (features[i].service == Service::Diplomacy) diplomacy_applied = applied[i];
         else if (features[i].service == Service::Tactical && applied[i]) tactical_applied = true;
         else if (features[i].service == Service::Government) government_applied = applied[i];
+    }
+    if (!tactical_applied && tactical_rule_enabled) {
+        if (host->rules.set_bool(host->host_context, sv("ai.tactical.policy"), 0) == SAN14_OK) {
+            tactical_rule_enabled = false;
+        } else {
+            busy = true;
+        }
     }
     if (diplomacy_registered && !diplomacy_applied) {
         if (host->diplomacy->unregister_policy(host->host_context) == SAN14_OK) diplomacy_registered = false;
@@ -210,6 +274,7 @@ void SAN14_MOD_CALL unload(San14ModContext*) {
     diplomacy_registered = false;
     tactical_registered = false;
     government_registered = false;
+    tactical_rule_enabled = false;
     diplomacy_state.set_enabled(false);
     tactical_state.set_config({});
     for (auto& value : applied) value = false;
