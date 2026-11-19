@@ -44,7 +44,7 @@ static San14Result SAN14_ADAPTER_CALL admit(const wchar_t* folder,const San14Cor
         const auto perms=j.at("permissions");if(perms.type!=json::Value::Array)throw std::runtime_error("Invalid permissions");std::set<std::string> granted;
         for(const auto& v:perms.array){auto p=v.str();if(!permissions.count(p)||!granted.insert(p).second)throw std::runtime_error("Unknown/duplicate permission");}
         const bool raw=manifest_identity::admit(j,granted,identity->game_exe_sha256);
-        auto mode=j.at("disable_mode").str();if(mode!="hot"&&mode!="restart")throw std::runtime_error("Invalid disable mode");
+        auto mode=j.at("disable_mode").str();if(mode!="hot"&&mode!="restart"&&mode!="main_menu")throw std::runtime_error("Invalid disable mode");
         const auto author=j.has("author")?j.at("author").str():"";if(wide(author).size()>80)throw std::runtime_error("Author exceeds 80 characters");
         if(j.has("author_url")){auto link=j.at("author_url").str();if(!url(link)||(!link.empty()&&author.empty()))throw std::runtime_error("Invalid author URL");}
         if(j.has("source_url")&&!url(j.at("source_url").str()))throw std::runtime_error("Invalid source URL");
