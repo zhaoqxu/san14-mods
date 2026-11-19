@@ -31,6 +31,15 @@ enum San14OfficerHistoryItem { SAN14_HISTORY_ITEM_TRANSFER=0, SAN14_HISTORY_ITEM
 enum San14OfficerHistoryPost { SAN14_HISTORY_POST_UNKNOWN=0, SAN14_HISTORY_POST_PROMOTED=1,
     SAN14_HISTORY_POST_DEMOTED=2, SAN14_HISTORY_POST_LATERAL=3,
     SAN14_HISTORY_POST_APPOINTED=4, SAN14_HISTORY_POST_REMOVED=5 };
+/* A confirmed whole-person settlement ended in a new force ruled by actor.
+ * This records independence, without guessing whether a scheme caused it. */
+enum San14OfficerHistoryForce { SAN14_HISTORY_FORCE_TRANSFER=0, SAN14_HISTORY_FORCE_INDEPENDENT=1 };
+/* STATUS 6 -> serving/free only; UNKNOWN includes legacy records. Captured at
+ * the release settlement, never inferred from a same-day report or new rank. */
+enum San14OfficerHistoryRelease { SAN14_HISTORY_RELEASE_UNKNOWN=0,
+    SAN14_HISTORY_RELEASE_ESCAPE=1, SAN14_HISTORY_RELEASE_DIPLOMATIC=2,
+    SAN14_HISTORY_RELEASE_FREED=3, SAN14_HISTORY_RELEASE_RESCUED=4,
+    SAN14_HISTORY_RELEASE_UNIT_DEFEAT=5 };
 /* High flag bits select the participating officer views recorded for this event.
  * Zero high bits are legacy records, visible to both participants. */
 #define SAN14_HISTORY_VIEW_ACTOR 0x40u
@@ -44,6 +53,12 @@ enum San14OfficerHistoryPost { SAN14_HISTORY_POST_UNKNOWN=0, SAN14_HISTORY_POST_
 #define SAN14_HISTORY_FORCE_RULERS 0x10u
 /* DUEL result: 0 actor wins, 1 subject wins, 2 draw.
  * POST/FORCE/STATUS: actor changed old_value -> new_value.
+ * FORCE INDEPENDENT object_id: confirmed current city when known (0 unknown).
+ * STATUS 6 -> 1..5 result: San14OfficerHistoryRelease; object_id: previous
+ * current city, validated before release (0 unknown). Never home-city fallback.
+ * RESCUED/UNIT_DEFEAT subject_id: confirmed liberating commander, subject_force
+ * and detail_value: commander's force/ruler. Rescue additionally requires the
+ * winning force to match the prisoner's pre-release original force.
  * ITEM: actor=recipient, subject=previous owner, object_id=item ID.
  * CITY: object_id=city ID, old/new_value=force IDs.
  * UNIT/CAPTURE: actor=winner/captor (possibly unknown), subject=loser/captive.
@@ -96,6 +111,14 @@ typedef struct San14OfficerHistoryApi {
      * selected participants are stored in the event, so later setting changes do
      * not alter old records. Set before enabling recording; default ALL. */
     San14Result (SAN14_MOD_CALL *set_event_mask)(void*,uint32_t mask);
+    /* Optional v3 tail. UI thread; same read/storage permissions. Formats a
+     * stored fact for a recorded participant. No raw native message IDs.
+     * flags=0 plain UTF-8, flags=1 native rich text. required includes NUL;
+     * insufficient capacity returns BUFFER_TOO_SMALL without partial text.
+     * revision must match the query that supplied event_id. */
+    San14Result (SAN14_MOD_CALL *describe)(void*,uint64_t revision,uint64_t event_id,
+        uint32_t officer_id,uint32_t flags,char* buffer,uint32_t capacity,uint32_t* required);
 } San14OfficerHistoryApi;
+#define SAN14_OFFICER_HISTORY_API_V2_SIZE ((uint32_t)offsetof(San14OfficerHistoryApi,describe))
 #define SAN14_OFFICER_HISTORY_API_V1_SIZE ((uint32_t)offsetof(San14OfficerHistoryApi,set_event_mask))
 #endif
