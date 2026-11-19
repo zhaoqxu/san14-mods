@@ -2,7 +2,10 @@
 import argparse
 import hashlib
 import json
+import importlib.util
 from pathlib import Path, PurePosixPath
+import shutil
+import tempfile
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
@@ -49,6 +52,25 @@ def write_zip(path,files):
             raise ValueError('Package verification failed')
 
 
+def content_files(root, project, authored, manifest):
+    spec=importlib.util.spec_from_file_location('san14_content_compiler',root/'sdk/tools/content_compiler.py')
+    compiler=importlib.util.module_from_spec(spec);spec.loader.exec_module(compiler)
+    for path in project.rglob('*'):
+        if path.is_symlink() or path.is_junction():raise ValueError('Content links refused')
+    with tempfile.TemporaryDirectory() as temporary:
+        stage=Path(temporary)/'content'
+        shutil.copytree(project,stage)
+        definition=read(safe_file(project,manifest['entry']['path']))
+        native=definition.get('scenario',{}).get('native_file')
+        if native:
+            source=safe_file(authored,native)
+            target=stage/native;target.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copyfile(source,target)
+        generated=compiler.compile_package(stage,manifest['entry']['path'],manifest['id'],manifest['version'])
+    compiled_manifest=dict(manifest,entry={'type':'content','path':compiler.ENTRY})
+    return {'mod.json':compiler.encoded(compiled_manifest),**generated}
+
+
 def package(root,output,items):
     from jsonschema import Draft202012Validator
     validator=Draft202012Validator(read(root/'sdk/schemas/mod.schema.json'))
@@ -57,15 +79,11 @@ def package(root,output,items):
     for item in items:
         project=root/item['path'];manifest=read(project/'mod.json')
         validator.validate(manifest)
-        files={'mod.json':(project/'mod.json').read_bytes()}
         entry=manifest['entry']['path']
-        files[entry]=safe_file(project,entry).read_bytes()
         if item['type']=='content':
-            content=read(project/entry)
-            native=content.get('scenario',{}).get('native_file')
-            if native:
-                authored=output/'authored'/item['id']
-                files[native]=safe_file(authored,native).read_bytes()
+            files=content_files(root,project,output/'authored'/item['id'],manifest)
+        else:
+            files={'mod.json':(project/'mod.json').read_bytes(),entry:safe_file(project,entry).read_bytes()}
         readme=project/'README.md'
         if readme.is_file():files['README.md']=readme.read_bytes()
         archive=output/'mods'/item['group']/(item['id']+'-'+item['version']+'.s14mod')

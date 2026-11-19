@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import hashlib
+import struct
 from pathlib import Path
 import sys
 import tempfile
@@ -12,6 +14,25 @@ package=importlib.util.module_from_spec(spec);spec.loader.exec_module(package)
 
 
 class PackagingTests(unittest.TestCase):
+    def test_content_bundle_is_compiled_and_its_native_asset_is_attested(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);project=root/'project';authored=root/'authored'
+            project.mkdir();(authored/'content').mkdir(parents=True)
+            manifest={'id':'fixture-content','version':'0.1.0','entry':{'type':'content','path':'scenario.json'}}
+            definition={'schema_version':2,'id':manifest['id'],'version':manifest['version'],
+                        'scenario':{'key':'fixture','base_id':1,'name':'Fixture','description':'Fixture','native_file':'content/fixture.s14'}}
+            (project/'scenario.json').write_text(json.dumps(definition))
+            blob=bytearray(1024);magic=b'\x66\0\0\0SN14SCEXVER0001\0';blob[:len(magic)]=magic
+            struct.pack_into('<III',blob,32,440620876,16,10);blob[44:300]=bytes(range(256))
+            (authored/'content/fixture.s14').write_bytes(blob)
+            files=package.content_files(ROOT,project,authored,manifest)
+            entry=json.loads(files['mod.json'])['entry']['path']
+            compiled=json.loads(files[entry]);asset=compiled['scenario']['native_file']
+            self.assertIs(compiled['compiled'],True)
+            self.assertEqual(asset['sha256'],hashlib.sha256(blob).hexdigest())
+            self.assertEqual(files[asset['path']],bytes(blob))
+            self.assertNotIn('scenario.json',files)
+
     def test_default_does_not_select_optional_mods(self):
         selected=package.selected(ROOT)
         self.assertEqual({item['id'] for item in selected},
