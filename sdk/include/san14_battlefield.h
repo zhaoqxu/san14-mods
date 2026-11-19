@@ -1,11 +1,13 @@
 #ifndef SAN14_MOD_SDK_BATTLEFIELD_H
 #define SAN14_MOD_SDK_BATTLEFIELD_H
 #include "san14_types.h"
+#include "san14_battlefield_deaths.h"
 #define SAN14_BATTLEFIELD_LOSSES 1u
 #define SAN14_BATTLEFIELD_DEFEATS 2u
 #define SAN14_BATTLEFIELD_OFFICERS 4u
 #define SAN14_BATTLEFIELD_TACTICS 8u
-#define SAN14_BATTLEFIELD_ALL 15u
+#define SAN14_BATTLEFIELD_DEATHS 16u
+#define SAN14_BATTLEFIELD_ALL 31u
 typedef struct San14BattlefieldOfficer {
     uint32_t struct_size,officer_id,available_categories,reserved;
     uint64_t field_damage,city_damage,battle_losses,durability_damage;
@@ -38,5 +40,10 @@ typedef struct San14BattlefieldApi {
     /* UI thread; offset enumerates only tactics actually recorded for officer.
      * Returns NOT_FOUND at end. No inferred unique-tactic classification. */
     San14Result (SAN14_MOD_CALL *query_tactic)(void*,uint32_t,uint32_t,San14BattlefieldTactic*);
+    /* Optional tail: kind CITY=1 / AREA=2; same thread and permission contract
+     * as query_area. Counts deaths after wounded settlement, before transfers.
+     * Old loss records cannot reconstruct historical deaths. */
+    San14Result (SAN14_MOD_CALL *query_deaths)(void*,uint32_t kind,uint32_t object_id,San14BattlefieldDeaths*);
 } San14BattlefieldApi;
+#define SAN14_BATTLEFIELD_API_V1_SIZE offsetof(San14BattlefieldApi,query_deaths)
 #endif

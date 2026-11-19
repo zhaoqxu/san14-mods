@@ -18,6 +18,11 @@ struct Fixture {
     std::vector<std::string> registered_order;
     San14RosterTabRefresh refresh_callback=nullptr;San14RosterTabValue value_callback=nullptr;void* tab_context=nullptr;
     std::vector<std::string> columns;
+    San14TerritoryTabsApi territory_api{};
+    struct Territory {San14RosterTabRefresh refresh;San14TerritoryTabValue value;void* context;};std::map<uint32_t,Territory> territory;
+    static San14Result SAN14_MOD_CALL territory_register(void* p,uint32_t kind,San14StringView key,const San14TerritoryTabSpec* spec){auto& f=self(p);assert((kind==1||kind==2)&&str(key)=="battle"&&str(spec->title)==u8"战斗"&&spec->column_count==1&&str(spec->columns[0].label)==u8"累计阵亡士兵");f.territory[kind]={spec->refresh,spec->value,spec->plugin_context};return SAN14_OK;}
+    static San14Result SAN14_MOD_CALL territory_unregister(void* p,uint32_t kind,San14StringView){return self(p).territory.erase(kind)?SAN14_OK:SAN14_E_NOT_FOUND;}
+    static San14Result SAN14_MOD_CALL query_deaths(void*,uint32_t kind,uint32_t id,San14BattlefieldDeaths* out){if(id==2)return SAN14_E_NOT_FOUND;*out={sizeof(*out),kind,id,1,(uint64_t(1)<<35)+kind*100+id};return SAN14_OK;}
     San14BattlefieldApi battlefield_api{};uint32_t battlefield_mask=0;bool battlefield_fails=false;
     San14BattlefieldOfficer contribution{sizeof(contribution),1,SAN14_BATTLEFIELD_ALL};
     San14RosterTabRefresh contribution_refresh=nullptr;San14RosterTabValue contribution_value=nullptr;
@@ -192,16 +197,18 @@ int main(){
     }
     {Fixture f(true,false);assert(f.history_recording&&f.history_visible);for(const auto& option:history_options)assert(f.settings.at(option.key).flags==SAN14_BOOL_SETTING_DISABLED);}
     {Fixture f;assert(f.mod.on_disable(&f.mod_context)==SAN14_OK);
-        f.battlefield_api={sizeof(f.battlefield_api),Fixture::battlefield_record,Fixture::battlefield_caps,nullptr,Fixture::battlefield_query,nullptr};f.api.battlefield=&f.battlefield_api;
+        f.battlefield_api={sizeof(f.battlefield_api),Fixture::battlefield_record,Fixture::battlefield_caps,nullptr,Fixture::battlefield_query,nullptr};f.battlefield_api.query_deaths=Fixture::query_deaths;f.api.battlefield=&f.battlefield_api;
+        f.territory_api={sizeof(f.territory_api),Fixture::territory_register,Fixture::territory_unregister};f.api.territory_tabs=&f.territory_api;
         f.tabs_api.register_named_tab=Fixture::register_named;f.tabs_api.unregister_named_tab=Fixture::unregister_named;
-        f.prefs["battlefield.recording"]=1;assert(f.mod.on_enable(&f.mod_context)==SAN14_OK&&f.battlefield_mask==15&&f.contribution_refresh);
+        f.prefs["battlefield.recording"]=1;assert(f.mod.on_enable(&f.mod_context)==SAN14_OK&&f.battlefield_mask==SAN14_BATTLEFIELD_ALL&&f.contribution_refresh);
+        assert(f.territory.size()==2);for(unsigned kind=1;kind<=2;++kind){auto t=f.territory.at(kind);assert(t.refresh(t.context)==SAN14_OK);int64_t n64=0;assert(t.value(t.context,1,0,&n64)==SAN14_OK&&n64==(int64_t(1)<<35)+kind*100+1);assert(t.value(t.context,2,0,&n64)==SAN14_E_NOT_FOUND);}
         f.contribution.field_damage=123;f.contribution.tactics_used=4;f.contribution.links_joined=2;f.contribution.links_started=1;f.contribution.links_followed=1;
         assert(f.contribution_refresh(nullptr)==SAN14_OK);int32_t n=0;assert(f.contribution_value(nullptr,1,0,&n)==SAN14_OK&&n==123);assert(f.contribution_value(nullptr,1,4,&n)==SAN14_OK&&n==4);assert(f.contribution_value(nullptr,1,7,&n)==SAN14_OK&&n==1);
         f.contribution.available_categories=0;assert(f.contribution_refresh(nullptr)==SAN14_OK&&f.contribution_value(nullptr,1,0,&n)==SAN14_E_NOT_FOUND);
         f.contribution.available_categories=15;f.contribution.field_damage=UINT64_MAX;assert(f.contribution_refresh(nullptr)==SAN14_OK&&f.contribution_value(nullptr,1,0,&n)==SAN14_OK&&n==INT32_MAX);
-        auto& toggle=f.settings.at("battlefield.recording");f.battlefield_fails=true;assert(toggle.changed(nullptr,toggle.key,0)==SAN14_E_PLUGIN_FAILED&&f.battlefield_mask==15);f.battlefield_fails=false;assert(toggle.changed(nullptr,toggle.key,0)==SAN14_OK&&!f.battlefield_mask);
+        auto& toggle=f.settings.at("battlefield.recording");f.battlefield_fails=true;assert(toggle.changed(nullptr,toggle.key,0)==SAN14_E_PLUGIN_FAILED&&f.battlefield_mask==SAN14_BATTLEFIELD_ALL);f.battlefield_fails=false;assert(toggle.changed(nullptr,toggle.key,0)==SAN14_OK&&!f.battlefield_mask);
         ++f.info.revision;f.send(SAN14_EVENT_STORAGE_CHANGED);assert(f.contribution_value(nullptr,1,0,&n)==SAN14_E_NOT_FOUND);
-        assert(f.mod.on_disable(&f.mod_context)==SAN14_OK&&!f.battlefield_mask&&!f.contribution_refresh);
+        assert(f.mod.on_disable(&f.mod_context)==SAN14_OK&&!f.battlefield_mask&&!f.contribution_refresh&&f.territory.empty());
     }
     std::cout<<"Save stats plugin: baseline, rollback, columns, independent global history lease/action, failure rollback and lifecycle passed\n";
 }
