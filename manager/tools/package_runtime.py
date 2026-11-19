@@ -17,6 +17,12 @@ def package(core,adapter,output,runtime=None):
         if path.is_symlink() or path.is_junction():raise ValueError('Adapter license links refused')
         if path.is_file():files['SAN14Base/GameAdapter/licenses/'+path.relative_to(licenses).as_posix()]=path
     if not any(name.startswith('SAN14Base/GameAdapter/licenses/') for name in files):raise ValueError('Adapter licenses are empty')
+    source = Path(__file__).resolve().parents[2]
+    for name, relative in {
+        'run_match.py': 'tools/run_match.py',
+        'MATCH_RUNNER.md': 'sdk/docs/MATCH_RUNNER.md',
+    }.items():
+        files['SAN14Base/tools/'+name] = source/relative
     if runtime:
         for p in sorted(runtime.rglob('*')):
             if p.is_symlink():raise ValueError('Runtime symlinks refused')
