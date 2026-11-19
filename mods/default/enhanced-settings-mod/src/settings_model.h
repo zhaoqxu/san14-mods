@@ -94,19 +94,41 @@ struct PreferencesV2 {
         return true;
     }
 };
-struct Preferences {
+struct PreferencesV3 {
     int32_t version=3;
     int32_t enhanced_edit=0;
     std::array<int32_t,kCustomCount> values{};
     int32_t extended_merit=0;
     int32_t extended_traits=0; // Global engine preference; never restored from an older save.
-    Preferences(){const auto& defs=custom_defs();for(size_t i=0;i<values.size();++i)values[i]=defs[i].def_val;}
+    PreferencesV3(){const auto& defs=custom_defs();for(size_t i=0;i<values.size();++i)values[i]=defs[i].def_val;}
     bool valid()const{
         if(version!=3||(enhanced_edit!=0&&enhanced_edit!=1)||(extended_merit!=0&&extended_merit!=1)||
            (extended_traits!=0&&extended_traits!=1))return false;
         const auto& defs=custom_defs();
         for(size_t i=0;i<values.size();++i)if(values[i]<defs[i].min_val||values[i]>defs[i].max_val)return false;
         return true;
+    }
+};
+// The v4 record retains the v3 value prefix. The mask records user choices
+// even when an explicitly saved value happens to equal the game's standard.
+struct SettingFields {
+    static constexpr size_t edit=kCustomCount,merit=edit+1,count=merit+1;
+    std::array<uint32_t,(count+31)/32> words{};
+    bool has(size_t field)const{return (words[field/32]&(uint32_t{1}<<(field%32)))!=0;}
+    void set(size_t field){words[field/32]|=uint32_t{1}<<(field%32);}
+    bool valid()const{
+        if constexpr(count%32==0)return true;
+        return (words.back()>>(count%32))==0;
+    }
+};
+struct Preferences : PreferencesV3 {
+    SettingFields selected;
+    bool valid()const{return PreferencesV3::valid()&&selected.valid();}
+    void infer_selection(){
+        selected={};const auto& defs=custom_defs();
+        for(size_t i=0;i<values.size();++i)if(values[i]!=defs[i].def_val)selected.set(i);
+        if(enhanced_edit)selected.set(SettingFields::edit);
+        if(extended_merit)selected.set(SettingFields::merit);
     }
 };
 inline bool migrate_v2(const PreferencesV2& legacy,Preferences& out){
@@ -136,5 +158,6 @@ inline bool migrate_legacy(const LegacyPreferences& legacy,Preferences& out){
 }
 static_assert(sizeof(LegacyPreferences)==93*sizeof(int32_t),"Stable storage v1 wire layout");
 static_assert(sizeof(PreferencesV2)==105*sizeof(int32_t),"Stable storage v2 wire layout");
-static_assert(sizeof(Preferences)==106*sizeof(int32_t),"Stable storage v3 wire layout");
+static_assert(sizeof(PreferencesV3)==106*sizeof(int32_t),"Stable storage v3 wire layout");
+static_assert(sizeof(Preferences)==sizeof(PreferencesV3)+sizeof(SettingFields),"Stable storage v4 wire layout");
 }

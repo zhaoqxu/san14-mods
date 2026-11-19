@@ -3,6 +3,7 @@
 #include "san14_expert_page.h"
 #include "settings_model.h"
 #include "pending_settings.h"
+#include "preset_dialog.h"
 #include "force_color_dialog.h"
 #include "officer_traits_dialog.h"
 #include "officer_stats_dialog.h"
@@ -18,7 +19,7 @@ bool configured=false,edit_applied=false,merit_applied=false;
 bool traits_supported=false,traits_applied=false;
 std::array<bool,kCustomCount> supported{};
 Preferences defaults,current,draft,archive_defaults;
-bool draft_ready=false;
+bool draft_ready=false,preset_current_only=false;
 void update_pending(const std::string& message="");
 void update_value_marks();
 uint64_t revision=0;
@@ -28,6 +29,9 @@ std::unique_ptr<san14::ExpertPage> page;
 ForceColorDialog colors;
 OfficerTraitsDialog traits_editor;
 OfficerStatsDialog stats_editor;
+PresetDialog preset_dialog;
+uint64_t preset_revision=0;
+std::string preset_playthrough;
 San14PanelHandle dropdown=0;
 struct Choice {bool formation;size_t index;};
 std::vector<Choice> choices;
@@ -35,6 +39,7 @@ size_t city=0,formation=0;
 San14StringView sv(const std::string& s){return {s.data(),static_cast<uint32_t>(s.size())};}
 San14StringView sv(const char* s){return {s,static_cast<uint32_t>(std::strlen(s))};}
 void check(San14Result r){if(r!=SAN14_OK)throw r;}
+constexpr const char* preferences_key="enhanced.preferences.v4";
 San14Result detect_capabilities(){
     traits_supported=false;
     if(OfficerTraitsDialog::supported(host)){
@@ -67,10 +72,18 @@ San14Result read_preferences(const char* scope,Preferences& out,bool* migrated=n
         return changed;
     };
     Preferences next=out;uint32_t size=0;
-    auto result=read_record(sv("enhanced.preferences.v3"),&next,sizeof(next),&size);
+    auto result=read_record(sv(preferences_key),&next,sizeof(next),&size);
     if(result==SAN14_OK){
-        const bool limited=limit_hire(next.values);
         if(size!=sizeof(next)||!next.valid())return SAN14_E_INVALID_ARGUMENT;
+        out=next;return SAN14_OK;
+    }
+    if(result!=SAN14_E_NOT_FOUND)return result;
+    PreferencesV3 v3;
+    result=read_record(sv("enhanced.preferences.v3"),&v3,sizeof(v3),&size);
+    if(result==SAN14_OK){
+        const bool limited=limit_hire(v3.values);
+        if(size!=sizeof(v3)||!v3.valid())return SAN14_E_INVALID_ARGUMENT;
+        static_cast<PreferencesV3&>(next)=v3;next.infer_selection();
         out=next;if(migrated)*migrated=limited;return SAN14_OK;
     }
     if(result!=SAN14_E_NOT_FOUND)return result;
@@ -79,27 +92,33 @@ San14Result read_preferences(const char* scope,Preferences& out,bool* migrated=n
     if(result==SAN14_OK){
         limit_hire(v2.values);
         if(size!=sizeof(v2)||!migrate_v2(v2,next))return SAN14_E_INVALID_ARGUMENT;
-        out=next;if(migrated)*migrated=true;return SAN14_OK;
+        next.infer_selection();out=next;if(migrated)*migrated=true;return SAN14_OK;
     }
     if(result!=SAN14_E_NOT_FOUND)return result;
     LegacyPreferences legacy;
     result=read_record(sv("enhanced.preferences.v1"),&legacy,sizeof(legacy),&size);
     if(result!=SAN14_OK)return result;
     if(size!=sizeof(legacy)||!migrate_legacy(legacy,next))return SAN14_E_INVALID_ARGUMENT;
-    out=next;if(migrated)*migrated=true;return SAN14_OK;
+    next.infer_selection();out=next;if(migrated)*migrated=true;return SAN14_OK;
 }
 San14Result write_preferences(const char* scope,const Preferences& value){
-    return host->storage.write_atomic(host->host_context,sv(scope),sv("enhanced.preferences.v3"),&value,sizeof(value));
+    return host->storage.write_atomic(host->host_context,sv(scope),sv(preferences_key),&value,sizeof(value));
 }
 San14Result load_archive_defaults(){
     // An existing native file without this Mod's record must not inherit
     // defaults edited later for new games. Keep its original fallback stable.
     archive_defaults=defaults;uint32_t size=0;
-    const auto key=sv("enhanced.archive-defaults.v1");
+    const auto key=sv("enhanced.archive-defaults.v2");
     const auto r=host->storage.read(host->host_context,sv("global"),key,&archive_defaults,sizeof(archive_defaults),&size);
-    if(r==SAN14_E_NOT_FOUND){archive_defaults=defaults;return host->storage.write_atomic(host->host_context,sv("global"),key,&archive_defaults,sizeof(archive_defaults));}
-    if(r!=SAN14_OK)return r;
-    return size==sizeof(archive_defaults)&&archive_defaults.valid()?SAN14_OK:SAN14_E_INVALID_ARGUMENT;
+    if(r==SAN14_OK)return size==sizeof(archive_defaults)&&archive_defaults.valid()?SAN14_OK:SAN14_E_INVALID_ARGUMENT;
+    if(r!=SAN14_E_NOT_FOUND)return r;
+    PreferencesV3 legacy;
+    const auto old=host->storage.read(host->host_context,sv("global"),sv("enhanced.archive-defaults.v1"),&legacy,sizeof(legacy),&size);
+    if(old==SAN14_OK){
+        if(size!=sizeof(legacy)||!legacy.valid())return SAN14_E_INVALID_ARGUMENT;
+        static_cast<PreferencesV3&>(archive_defaults)=legacy;archive_defaults.infer_selection();
+    }else if(old!=SAN14_E_NOT_FOUND)return old;
+    return host->storage.write_atomic(host->host_context,sv("global"),key,&archive_defaults,sizeof(archive_defaults));
 }
 San14Result apply_traits(bool expanded){
     if(!traits_supported)return expanded?SAN14_E_UNSUPPORTED:SAN14_OK;
@@ -158,7 +177,7 @@ San14Result sync(){
     }
     const bool values_changed=std::memcmp(&next,&current,sizeof(next))!=0;
     const auto applied=switched||values_changed?apply(next,true):SAN14_OK;if(applied!=SAN14_OK)return applied;
-    current=next;if(switched){draft=next;draft_ready=true;}revision=info.revision;playthrough=info.state==SAN14_STORAGE_READY?info.playthrough_id:"";sync_needed=false;
+    current=next;if(switched){preset_dialog.close();draft=next;draft_ready=true;preset_current_only=false;}revision=info.revision;playthrough=info.state==SAN14_STORAGE_READY?info.playthrough_id:"";sync_needed=false;
     if(page){if(switched||values_changed){traits_editor.reset();stats_editor.reset();}update_rows();page->refresh();update_pending();}
     return SAN14_OK;
 }
@@ -190,44 +209,81 @@ bool saved_edit_supported(){
 }
 void update_pending(const std::string& message){
     if(!page)return;const auto count=PendingSettings(current,draft).count();
+    if(!count)preset_current_only=false;
     update_value_marks();
-    page->footer_status(message.empty()?(count?std::string(u8"有 ")+std::to_string(count)+u8" 项未保存变更，尚未生效；返回将放弃。":u8"调整后点击保存变更；需同步其他已有存档时，选择保存变更到全部存档。") : message,count&&saved_edit_supported());
+    const auto pending=preset_current_only?u8" 项未保存变更。保存变更仅应用到当前档。":u8" 项未保存变更，尚未生效；返回将放弃。";
+    page->footer_status(message.empty()?(count?std::string(u8"有 ")+std::to_string(count)+pending:u8"调整后点击保存变更；需同步其他已有存档时，选择保存变更到全部存档。") : message,count&&saved_edit_supported());
 }
 San14Result commit(const Preferences& next){
     if(!active)return SAN14_E_BUSY;if(!next.valid())return SAN14_E_INVALID_ARGUMENT;
     draft=next;draft_ready=true;update_pending();return SAN14_OK;
+}
+San14Result preview_preset(const Preferences& source){
+    auto result=sync();
+    if(result!=SAN14_OK||revision!=preset_revision||playthrough!=preset_playthrough){
+        update_pending(u8"存档忙碌或已切换，请重新读取设定。");
+        return result==SAN14_OK?SAN14_E_STALE_GENERATION:result;
+    }
+    San14SaveStorageInfo info{sizeof(info)};
+    result=host->save_storage->context(host->host_context,&info);if(result!=SAN14_OK)return result;
+    if(info.revision!=preset_revision){update_pending(u8"存档已切换，请重新读取设定。");return SAN14_E_STALE_GENERATION;}
+    auto next=draft;
+    for(size_t i=0;i<kCustomCount;++i)if(supported[i]&&source.selected.has(i))next.values[i]=source.values[i];
+    if(source.selected.has(SettingFields::edit))next.enhanced_edit=source.enhanced_edit;
+    if(source.selected.has(SettingFields::merit))next.extended_merit=source.extended_merit;
+    preset_current_only=info.state==SAN14_STORAGE_READY;
+    result=commit(next);if(result!=SAN14_OK)return result;
+    update_rows();page->refresh();
+    if(!PendingSettings(current,draft).count())update_pending(u8"这套设定与当前配置一致。");
+    return SAN14_OK;
+}
+San14Result open_presets(bool reading){
+    const auto result=sync();if(result!=SAN14_OK)return result;
+    preset_revision=revision;preset_playthrough=playthrough;
+    if(reading)return preset_dialog.open(host,defaults,preview_preset);
+    const auto snapshot=PendingSettings(current,draft).merge(draft);
+    if(std::none_of(snapshot.selected.words.begin(),snapshot.selected.words.end(),[](uint32_t word){return word!=0;})){
+        update_pending(u8"请先调整至少一项设定，再保存为预设。");return SAN14_OK;
+    }
+    return preset_dialog.open(host,snapshot,nullptr);
 }
 struct EditTransform {PendingSettings patch;Preferences fallback;};
 San14Result SAN14_MOD_CALL transform_saved(void* context,const San14SavedDataAccess* access){
     const auto& edit=*static_cast<EditTransform*>(context);Preferences next=edit.fallback;
     auto r=read_preferences("playthrough",next,nullptr,access);if(r!=SAN14_OK&&r!=SAN14_E_NOT_FOUND)return r;
     next=edit.patch.merge(next);if(!next.valid())return SAN14_E_INVALID_ARGUMENT;
-    return access->write(access->context,sv("playthrough"),sv("enhanced.preferences.v3"),&next,sizeof(next));
+    return access->write(access->context,sv("playthrough"),sv(preferences_key),&next,sizeof(next));
 }
 San14Result save_pending(uint32_t target){
     auto r=sync();if(r!=SAN14_OK){update_pending(u8"存档忙碌或已切换，请稍后重新编辑。");return r;}
     if(!saved_edit_supported()){update_pending(u8"当前管理器不支持直接保存设置，请更新管理器。");return SAN14_E_UNSUPPORTED;}
     const PendingSettings patch(current,draft);if(!patch.count())return SAN14_OK;
     San14SaveStorageInfo info{sizeof(info)};r=host->save_storage->context(host->host_context,&info);if(r!=SAN14_OK)return r;
+    if(info.revision!=revision){update_pending(u8"存档已切换，请重新编辑。");return SAN14_E_STALE_GENERATION;}
     const bool current_file=info.state==SAN14_STORAGE_READY&&info.save_basename[0];
-    const auto old_defaults=defaults;auto next_defaults=patch.merge(defaults);
-    r=write_preferences("global",next_defaults);if(r!=SAN14_OK){update_pending(u8"默认设置写入失败，变更仍未提交。");return r;}
+    const bool current_only=false;
+    const auto old_defaults=defaults;
+    const auto next_defaults=current_only?defaults:patch.merge(defaults);
+    if(!current_only){
+        r=write_preferences("global",next_defaults);if(r!=SAN14_OK){update_pending(u8"默认设置写入失败，变更仍未提交。");return r;}
+    }
+    const auto next=patch.merge(current);
     EditTransform edit{patch,archive_defaults};San14SavedEditResult report{sizeof(report)};
     r=host->save_storage->edit_saved(host->host_context,target,info.revision,transform_saved,&edit,&report);
     // A current-target NOT_FOUND without a filename is the accepted no-save
     // case. Still query the Host first so worker, pending-save and stale
     // revision guards run before applying new-game defaults/live parameters.
     if(r==SAN14_E_NOT_FOUND&&target==SAN14_SAVED_EDIT_CURRENT&&!current_file)
-        r=info.state==SAN14_STORAGE_READY?write_preferences("playthrough",draft):SAN14_OK;
+        r=info.state==SAN14_STORAGE_READY?write_preferences("playthrough",next):SAN14_OK;
     if(r!=SAN14_OK){
-        const bool default_failed=write_preferences("global",old_defaults)!=SAN14_OK;
+        const bool default_failed=!current_only&&write_preferences("global",old_defaults)!=SAN14_OK;
         update_pending(report.rollback_failed||default_failed?u8"保存失败，部分数据未能回退，请保留附加文件备份并核对设置。":u8"保存失败，原有设置已保留，待提交变更仍在。请检查存档与附加文件。");return r;
     }
     defaults=next_defaults;
-    const auto next=draft;r=apply(next,true);current=next;draft=next;
+    r=apply(next,true);current=next;draft=next;preset_current_only=false;
     sync_needed=true;update_rows();page->refresh();
-    if(r!=SAN14_OK){update_pending(current_file||target==SAN14_SAVED_EDIT_ALL?u8"设置已保存，当前局应用失败，请重新读取存档。":u8"新局默认已保存，当前应用失败，请重新进入或读取存档。");return r;}
-    update_pending(target==SAN14_SAVED_EDIT_CURRENT?u8"已保存变更：当前存档（如有）及新局默认已更新，其他已有存档不变。":std::string(u8"已保存变更到 ")+std::to_string(report.matched_files)+u8" 个存档并应用，已更新新局默认。");return SAN14_OK;
+    if(r!=SAN14_OK){update_pending(current_only||current_file||target==SAN14_SAVED_EDIT_ALL?u8"设置已保存，当前局应用失败，请重新读取存档。":u8"新局默认已保存，当前应用失败，请重新进入或读取存档。");return r;}
+    update_pending(current_only?u8"已应用到当前战局和存档（如有）。":target==SAN14_SAVED_EDIT_CURRENT?u8"已保存变更：当前存档（如有）及新局默认已更新，其他已有存档不变。":std::string(u8"已保存变更到 ")+std::to_string(report.matched_files)+u8" 个存档并应用，已更新新局默认。");return SAN14_OK;
 }
 San14Result change_value(size_t index,int32_t value){
     if(index>=kCustomCount||!supported[index])return SAN14_E_UNSUPPORTED;
@@ -297,12 +353,12 @@ San14Result restore_tiers(size_t first,size_t count){
 San14Result SAN14_MOD_CALL open_page(void*){
     if(!active)return SAN14_E_BUSY;
     auto r=sync();if(r!=SAN14_OK)return r;
-    close_dropdown();traits_editor.reset();stats_editor.reset();if(page)page->close();draft=current;
+    close_dropdown();preset_dialog.close();traits_editor.reset();stats_editor.reset();if(page)page->close();draft=current;preset_current_only=false;
     try{
         page=std::make_unique<san14::ExpertPage>(host,u8"增强设定与编辑");
         page->set_footer_actions({{u8"保存变更",[]{return save_pending(SAN14_SAVED_EDIT_CURRENT);}},
             {u8"保存变更到全部存档",[]{return save_pending(SAN14_SAVED_EDIT_ALL);}}});
-        page->footer_hint(u8"保存变更：当前存档（如有）及新局默认。\n其他已有存档不变；另可选择同步全部存档。");
+        page->footer_hint(u8"保存变更更新当前档和新局默认，其他已有存档不变。\n读取预设进入草稿，保存后同时更新当前档及新局默认。");
         page->add_bool(u8"常规","edit",u8"城市编辑支持异族势力",u8"在原生编辑中解锁异族城市 47–51 与异族势力 46–50。",current.enhanced_edit!=0,[](int32_t v){return change_edit(nullptr,{},v);});
         page->add_bool(u8"常规","merit",u8"大幅提高武将功劳上限",u8"功劳上限由 12000 提高至 32767，默认关闭。修改后选择保存范围才生效。",current.extended_merit!=0,[](int32_t v){return change_merit(nullptr,{},v);});
         const auto& defs=custom_defs();
@@ -331,6 +387,8 @@ San14Result SAN14_MOD_CALL open_page(void*){
         }
         if(std::any_of(supported.begin()+kOfficerHireFirst,supported.end(),[](bool v){return v;}))
             page->add_action(u8"雇用","hire.reset",u8"恢复雇用上限标准",u8"恢复七个官爵档位的雇用上限。",[]{return restore_tiers(kOfficerHireFirst,7);},u8"恢复全部雇用");
+        page->add_action(u8"预设","presets.read",u8"读取设定",u8"载入新局默认或命名预设，预览差异后再保存。",[]{return open_presets(true);},u8"读取");
+        page->add_action(u8"预设","presets.save",u8"保存为预设",u8"给当前明确配置的参数和草稿命名，可在其他存档读取。",[]{return open_presets(false);},u8"保存为预设");
         update_rows();update_pending();return page->show();
     }catch(San14Result e){return e;}catch(...){return SAN14_E_PLUGIN_FAILED;}
 }
@@ -376,6 +434,7 @@ San14Result SAN14_MOD_CALL disable(San14ModContext*){
     // Refuse a partial disable while nine-slot mode protects a loaded save.
     // Native five-slot recalculation can erase the extra IDs.
     const auto released=apply_traits(false);if(released!=SAN14_OK)return released;
+    if(preset_dialog.close()!=SAN14_OK)return SAN14_E_BUSY;
     close_dropdown();colors.reset();traits_editor.reset();stats_editor.reset();if(page)page->close();
     bool busy=false;
     for(auto& sub:subscriptions)if(sub){const auto r=host->events.unsubscribe(host->host_context,sub);if(r==SAN14_OK||r==SAN14_E_NOT_FOUND)sub=0;else busy=true;}
@@ -385,7 +444,7 @@ San14Result SAN14_MOD_CALL disable(San14ModContext*){
     if(busy)return SAN14_E_BUSY;
     active=false;revision=0;playthrough.clear();return SAN14_OK;
 }
-void SAN14_MOD_CALL unload(San14ModContext*){page.reset();colors.reset();traits_editor.reset();stats_editor.reset();host=nullptr;active=false;traits_supported=false;traits_applied=false;}
+void SAN14_MOD_CALL unload(San14ModContext*){preset_dialog.close();page.reset();colors.reset();traits_editor.reset();stats_editor.reset();host=nullptr;active=false;traits_supported=false;traits_applied=false;}
 }
 extern "C" SAN14_MOD_EXPORT San14Result SAN14_MOD_CALL SAN14Mod_Initialize(const San14HostApi* h,San14ModApi* out){
     if(!h||!out||out->struct_size<sizeof(*out)||h->abi_version!=SAN14_HOST_ABI_V1||

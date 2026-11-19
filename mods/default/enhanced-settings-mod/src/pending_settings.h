@@ -11,8 +11,9 @@ struct PendingSettings {
     }
     size_t count()const{size_t n=edit+merit;for(auto field:fields)n+=field;return n;}
     Preferences merge(Preferences target)const{
-        for(size_t i=0;i<fields.size();++i)if(fields[i])target.values[i]=value.values[i];
-        if(edit)target.enhanced_edit=value.enhanced_edit;if(merit)target.extended_merit=value.extended_merit;
+        for(size_t i=0;i<fields.size();++i)if(fields[i]){target.values[i]=value.values[i];target.selected.set(i);}
+        if(edit){target.enhanced_edit=value.enhanced_edit;target.selected.set(SettingFields::edit);}
+        if(merit){target.extended_merit=value.extended_merit;target.selected.set(SettingFields::merit);}
         return target;
     }
 };
