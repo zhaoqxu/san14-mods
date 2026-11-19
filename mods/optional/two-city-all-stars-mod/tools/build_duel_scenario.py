@@ -52,6 +52,9 @@ def author(reference: bytes, definition: dict) -> tuple[bytes, dict]:
         at = 44884 + (person - 1) * 372
         side = members.get(person)
         active = side is not None
+        # Keep original unavailable special officers absent from authored scenarios.
+        if not active and raw[at + 269] == 0:
+            continue
         city = sides[side]['city'] if active else 0
         put(at + 264, 'BHHBBB', side + 1 if active else 0, city, city,
             (1 if person == rulers[side] else 4) if active else 9, 73, 100)
