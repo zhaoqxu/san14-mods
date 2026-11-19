@@ -14,6 +14,22 @@ enum {
     SAN14_TACTICAL_MAX_TILE_ID = 0xbd0f
 };
 
+enum {
+    SAN14_TACTICAL_MOD_DEPLOY           = 1u << 0,
+    SAN14_TACTICAL_MOD_RALLY            = 1u << 1,
+    SAN14_TACTICAL_MOD_ENGAGE           = 1u << 2,
+    SAN14_TACTICAL_MOD_RETREAT          = 1u << 3,
+    SAN14_TACTICAL_MOD_STANCE           = 1u << 4,
+    SAN14_TACTICAL_MOD_WALLS            = 1u << 5,
+    SAN14_TACTICAL_MOD_SIEGEPLAN        = 1u << 6,
+    SAN14_TACTICAL_MOD_GATE             = 1u << 7,
+    SAN14_TACTICAL_MOD_LEGACY_NAVAL     = 1u << 8,
+    SAN14_TACTICAL_MOD_LEGACY_REINFORCE = 1u << 9,
+    SAN14_TACTICAL_MOD_LEGACY_SIEGE_INT = 1u << 10,
+    SAN14_TACTICAL_MOD_ALL_NEW8         = 0x00FFu,
+    SAN14_TACTICAL_MOD_ALL_LEGACY3      = 0x0700u
+};
+
 typedef struct San14TacticalDistrict {
     uint32_t struct_size;
     uint32_t district_id;
@@ -163,6 +179,104 @@ typedef struct San14TacticalOrderProposal {
     uint8_t reserved[3];
 } San14TacticalOrderProposal;
 
+typedef struct San14TacticalUnitExt {
+    uint32_t struct_size;
+    uint32_t unit_slot;
+    uint32_t troops_id;
+    uint32_t troops_purpose;
+    uint32_t troops_goal_id;
+    uint32_t troops_leader_officer_id;
+    uint32_t troops_leader_slot;
+    uint32_t ship_kind;
+    float troops_fighting_strength;
+} San14TacticalUnitExt;
+
+typedef struct San14TacticalForceExt {
+    uint32_t struct_size;
+    uint32_t force_id;
+    uint32_t naval_ship_kind;
+} San14TacticalForceExt;
+
+typedef struct San14TacticalArea {
+    uint32_t struct_size;
+    uint32_t area_id;
+    uint32_t city_id;
+    uint32_t fu_tile_id;
+    uint32_t owner_force_id;
+    uint16_t painted_hex_count;
+    uint16_t total_hex_count;
+    uint32_t neighbor_area_ids[8];
+    uint8_t has_foothold;
+    uint8_t reserved[3];
+} San14TacticalArea;
+
+typedef struct San14TacticalGate {
+    uint32_t struct_size;
+    uint32_t gate_id;
+    uint32_t foothold_id;
+    uint32_t tile_id;
+    uint32_t owner_force_id;
+    uint32_t district_id;
+} San14TacticalGate;
+
+typedef enum San14TacticalAbMode {
+    SAN14_TACTICAL_AB_ALL_ACTIVE = 0,
+    SAN14_TACTICAL_AB_VANILLA = 1,
+    SAN14_TACTICAL_AB_LEGACY = 2,
+    SAN14_TACTICAL_AB_NEW8 = 3,
+    SAN14_TACTICAL_AB_FUSED = 4,
+    SAN14_TACTICAL_AB_CUSTOM_MASK = 5
+} San14TacticalAbMode;
+
+typedef struct San14TacticalForceAbOverride {
+    uint32_t struct_size;
+    uint8_t has_override;
+    uint8_t reserved[3];
+    San14TacticalAbMode mode;
+    uint32_t enabled_module_mask;
+} San14TacticalForceAbOverride;
+
+typedef struct San14TacticalInterceptDeployContext {
+    uint32_t struct_size;
+    uint32_t district_id;
+    uint32_t force_id;
+    uint32_t source_foothold_id;
+    uint32_t target_foothold_id;
+    uint32_t officer_id;
+    uint32_t formation_id;
+    uint32_t naval_formation_id;
+    int32_t troops;
+    int32_t max_troops;
+    int32_t needed_strength;
+    uint32_t sent_count;
+    uint32_t target_unit_slot;
+    const uint32_t* candidate_officer_ids;
+    uint32_t candidate_count;
+} San14TacticalInterceptDeployContext;
+
+typedef struct San14TacticalInterceptDeployDecision {
+    uint32_t struct_size;
+    uint8_t skip_deploy;
+    uint8_t reserved[3];
+    int32_t override_troops;
+    uint32_t override_formation_id;
+    uint32_t override_naval_formation_id;
+} San14TacticalInterceptDeployDecision;
+
+typedef struct San14TacticalForceTelemetry {
+    uint32_t struct_size;
+    uint32_t force_id;
+    uint32_t deploy_overrides;
+    uint32_t rally_holds;
+    uint32_t engage_retargets;
+    uint32_t retreat_triggers;
+    uint32_t stance_adjusts;
+    uint32_t walls_actions;
+    uint32_t siegeplan_adjusts;
+    uint32_t gate_actions;
+    uint32_t legacy_actions;
+} San14TacticalForceTelemetry;
+
 typedef struct San14TacticalWorld {
     uint32_t struct_size;
     uint32_t year;
@@ -186,7 +300,17 @@ typedef struct San14TacticalWorld {
     uint32_t terrain_count;
     const uint8_t* treaties;
     uint32_t treaty_stride;
+    /* Optional append-only tail (check struct_size > SAN14_TACTICAL_WORLD_V1_SIZE). */
+    const San14TacticalUnitExt* unit_exts;
+    uint32_t unit_ext_count;
+    const San14TacticalForceExt* force_exts;
+    uint32_t force_ext_count;
+    const San14TacticalArea* areas;
+    uint32_t area_count;
+    const San14TacticalGate* gates;
+    uint32_t gate_count;
 } San14TacticalWorld;
+#define SAN14_TACTICAL_WORLD_V1_SIZE offsetof(San14TacticalWorld, unit_exts)
 
 /* Synchronous Host query/command operations valid only for the duration of a
  * tactical policy callback. Do not retain ops or ops_context. */
@@ -262,7 +386,35 @@ typedef struct San14TacticalHostOps {
     San14Result (SAN14_MOD_CALL *get_officer_traits)(
         void* ops_context, uint32_t officer_id, San14OfficerTraits* out_traits
     );
+    /* Optional append-only tail (check struct_size > SAN14_TACTICAL_HOST_OPS_V1_SIZE). */
+    San14Result (SAN14_MOD_CALL *eval_area_bonus)(
+        void* ops_context,
+        uint32_t tile_id,
+        uint32_t force_id,
+        float* out_multiplier,
+        int32_t* out_sum
+    );
+    San14Result (SAN14_MOD_CALL *eval_unit_exchange_ratio)(
+        void* ops_context,
+        uint32_t attacker_slot,
+        uint32_t atk_formation_id,
+        uint32_t defender_slot,
+        uint32_t def_formation_id,
+        float* out_ratio
+    );
+    San14Result (SAN14_MOD_CALL *set_troops_purpose)(
+        void* ops_context,
+        uint32_t troops_id,
+        int32_t purpose,
+        uint32_t goal_foothold_id
+    );
+    San14Result (SAN14_MOD_CALL *get_force_ab_override)(
+        void* ops_context,
+        uint32_t force_id,
+        San14TacticalForceAbOverride* out_override
+    );
 } San14TacticalHostOps;
+#define SAN14_TACTICAL_HOST_OPS_V1_SIZE offsetof(San14TacticalHostOps, eval_area_bonus)
 
 typedef enum San14TacticalStrategyPhase {
     SAN14_TACTICAL_PHASE_PLANNING = 1,
@@ -364,6 +516,50 @@ typedef San14Result (SAN14_MOD_CALL *San14TacticalDefenseOfficerEval)(
     uint32_t* out_override_target_tile_id
 );
 
+typedef void (SAN14_MOD_CALL *San14TacticalDailyCallback)(
+    void* plugin_context,
+    const San14TacticalWorld* world,
+    const San14TacticalHostOps* ops
+);
+
+typedef San14Result (SAN14_MOD_CALL *San14TacticalInterceptDeployEval)(
+    void* plugin_context,
+    const San14TacticalWorld* world,
+    const San14TacticalHostOps* ops,
+    const San14TacticalInterceptDeployContext* context,
+    San14TacticalInterceptDeployDecision* out_decision
+);
+
+/* out_allow_intercept: -1 = keep native_blocked, 0 = force block, 1 = force allow.
+ * out_halve_water_strength: 0 = normal, 1 = halve enemy strength on water tiles. */
+typedef San14Result (SAN14_MOD_CALL *San14TacticalInterceptGateEval)(
+    void* plugin_context,
+    const San14TacticalWorld* world,
+    const San14TacticalHostOps* ops,
+    uint32_t force_id,
+    uint32_t target_foothold_id,
+    uint32_t enemy_lead_unit_slot,
+    int32_t native_blocked,
+    int32_t* out_allow_intercept,
+    int32_t* out_halve_water_strength
+);
+
+typedef San14Result (SAN14_MOD_CALL *San14TacticalCommandRollbackExEval)(
+    void* plugin_context,
+    const San14TacticalWorld* world,
+    const San14TacticalHostOps* ops,
+    uint32_t district_id,
+    uint32_t force_id,
+    uint32_t remaining_commands,
+    int32_t* out_force_skip
+);
+
+typedef San14Result (SAN14_MOD_CALL *San14TacticalTelemetryQuery)(
+    void* plugin_context,
+    uint32_t force_id,
+    San14TacticalForceTelemetry* out_telemetry
+);
+
 typedef struct San14TacticalAiPolicy {
     uint32_t struct_size;
     void* plugin_context;
@@ -378,7 +574,15 @@ typedef struct San14TacticalAiPolicy {
     San14TacticalReserveEval on_eval_draft_reserve;
     San14TacticalCommandRollbackEval on_eval_command_rollback;
     San14TacticalDefenseOfficerEval on_select_defense_officer;
+    /* Optional append-only tail (check struct_size > SAN14_TACTICAL_AI_POLICY_V1_SIZE). */
+    San14TacticalDailyCallback on_daily_tactical_tick;
+    San14TacticalInterceptDeployEval on_eval_intercept_deploy;
+    San14TacticalInterceptGateEval on_eval_intercept_gate;
+    San14TacticalCommandRollbackExEval on_eval_command_rollback_ex;
+    San14TacticalOrderTargetFilter on_post_order_target;
+    San14TacticalTelemetryQuery on_query_telemetry;
 } San14TacticalAiPolicy;
+#define SAN14_TACTICAL_AI_POLICY_V1_SIZE offsetof(San14TacticalAiPolicy, on_daily_tactical_tick)
 
 /* Optional service for district/unit tactical AI policies.
  * Requires permission game.rules for policy registration (single active owner),
