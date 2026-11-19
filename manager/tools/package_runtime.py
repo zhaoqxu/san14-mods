@@ -20,6 +20,7 @@ def package(core,adapter,output,runtime=None):
     source = Path(__file__).resolve().parents[2]
     for name, relative in {
         'run_match.py': 'tools/run_match.py',
+        'match_render_profile.py': 'tools/match_render_profile.py',
         'MATCH_RUNNER.md': 'sdk/docs/MATCH_RUNNER.md',
     }.items():
         files['SAN14Base/tools/'+name] = source/relative

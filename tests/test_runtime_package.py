@@ -35,6 +35,7 @@ class RuntimePackageTests(unittest.TestCase):
             self.assertIn('dinput8.dll',archive.namelist())
             self.assertEqual(archive.read('SAN14Base/tools/run_match.py'),(ROOT/'tools/run_match.py').read_bytes())
             self.assertEqual(archive.read('SAN14Base/tools/MATCH_RUNNER.md'),(ROOT/'sdk/docs/MATCH_RUNNER.md').read_bytes())
+            self.assertEqual(archive.read('SAN14Base/tools/match_render_profile.py'),(ROOT/'tools/match_render_profile.py').read_bytes())
             self.assertNotIn('SAN14Base/tools/generate_match_profile.py',archive.namelist())
 
     def test_missing_adapter_notice_blocks_distribution(self):

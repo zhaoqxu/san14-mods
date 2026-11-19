@@ -80,11 +80,14 @@ class Client:
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     source=p.add_mutually_exclusive_group(required=True);source.add_argument('--save',help='e.g. svdexceSC49 (without extension)');source.add_argument('--current',action='store_true',help='explicitly start the currently loaded matching campaign');source.add_argument('--resume',type=Path,help='resume observation from an existing .state.json')
+    p.add_argument('--speed',type=int,default=0,help='100..800 clock multiplier in hundredths; omitted = inherit current speed without taking control');p.add_argument('--full-snapshot-interval',type=int,default=1000,help='full world sampling interval in ms, 0..5000; stop always captures fresh');
     p.add_argument('--endpoint',type=Path);p.add_argument('--content',default='two-city-all-stars-mod');p.add_argument('--max-turns',type=int,default=360)
     p.add_argument('--wall-timeout',type=int,default=3600);p.add_argument('--stall-timeout',type=int,default=180);p.add_argument('--run-id',default=None)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--poll-interval',type=float,default=.5)
     a=p.parse_args(argv)
     if a.output.exists():p.error('Output already exists; select a new file to preserve earlier results')
+    if a.speed and not 100<=a.speed<=800:p.error('Speed must be 100..800')
+    if not 0<=a.full_snapshot_interval<=5000:p.error('Snapshot interval must be 0..5000 ms')
     if a.poll_interval<.1:p.error('Poll interval must be at least 0.1 seconds')
     output=a.output.resolve();state_path=output.with_suffix(output.suffix+'.state.json')
     trace_path=output.with_suffix(output.suffix+'.jsonl');last_signature=None;client=None;handle=None;last=None
@@ -95,7 +98,8 @@ def main(argv=None):
             handle=saved.get('handle');options=saved['options']
         else:
             path,endpoint=discover(a.endpoint)
-            options={'request_id':a.run_id or uuid.uuid4().hex,'save_basename':a.save or '', 'required_content_id':a.content,'max_turns':a.max_turns,'wall_timeout_seconds':a.wall_timeout,'stall_timeout_seconds':a.stall_timeout}
+            options={'request_id':a.run_id or uuid.uuid4().hex,'save_basename':a.save or '', 'required_content_id':a.content,'max_turns':a.max_turns,'wall_timeout_seconds':a.wall_timeout,'stall_timeout_seconds':a.stall_timeout,'speed_x100':a.speed,'full_snapshot_interval_ms':a.full_snapshot_interval}
+        if options.get('speed_x100',0)!=0 and 'speed_lease' not in endpoint.get('features',[]):raise RuntimeError('Installed Host does not support per-match speed; update the manager first')
         client=Client(path,endpoint)
         state={'endpoint_path':str(path),'endpoint':endpoint,'options':options,'handle':handle}
         atomic_json(state_path,state) # durable identity before the mutating request

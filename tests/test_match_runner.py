@@ -61,4 +61,27 @@ class MatchClientTests(unittest.TestCase):
             with patch.object(cli,'process_creation',return_value=None):
                 with self.assertRaisesRegex(RuntimeError,'exited or changed'):cli.read_endpoint(p)
 
+class SpeedCliTests(unittest.TestCase):
+    def test_old_host_refuses_acceleration_before_submission(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out=Path(folder)/'result.json'
+            endpoint={'pid':123,'creation_filetime':456,'nonce':'test'}
+            with patch.object(cli,'discover',return_value=(Path(folder)/'runtime.json',endpoint)),patch.object(cli.Client,'request') as request:
+                self.assertEqual(cli.main(['--current','--speed','400','--output',str(out)]),2)
+                request.assert_not_called()
+                self.assertIn('does not support',json.loads(out.read_text())['reason'])
+    def test_default_inherits_old_host_speed_without_claiming_control(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out=Path(folder)/'result.json';endpoint={'pid':123,'creation_filetime':456,'nonce':'test'};captured=[]
+            def request(self,op,**fields):
+                if op=='start':captured.append(fields['options']);return {'handle':42}
+                return {'ok':True,'phase':'completed','complete':True,'reason':'date_limit'}
+            with patch.object(cli,'discover',return_value=(Path(folder)/'runtime.json',endpoint)),patch.object(cli.Client,'request',request):
+                self.assertEqual(cli.main(['--current','--output',str(out)]),0)
+            self.assertEqual(captured[0]['speed_x100'],0)
+    def test_invalid_speed_does_not_discover_or_submit(self):
+        with patch.object(cli,'discover') as discover:
+            with self.assertRaises(SystemExit):cli.main(['--current','--speed','801','--output','unused.json'])
+            discover.assert_not_called()
+
 if __name__=='__main__':unittest.main()
