@@ -52,7 +52,7 @@ constexpr const char* labels[]={u8"统率",u8"武力",u8"智力",u8"政治",u8"�
 San14StringView text(const char* s){return {s,static_cast<uint32_t>(std::strlen(s))};}
 void log(const char* s){if(host&&host->log.write)host->log.write(host->host_context,SAN14_LOG_WARNING,text("save-stats"),text(s));}
 bool history_supported(){return host&&host->struct_size>=offsetof(San14HostApi,officer_history)+sizeof(host->officer_history)&&host->officer_history&&host->officer_history->struct_size>=SAN14_OFFICER_HISTORY_API_V1_SIZE&&host->officer_history->set_recording&&host->officer_history->query&&host->officer_history->show&&host->officer_history->set_detail_action;}
-bool history_filters_supported(){return history_supported()&&host->officer_history->struct_size>=sizeof(San14OfficerHistoryApi)&&host->officer_history->set_event_mask;}
+bool history_filters_supported(){return history_supported()&&host->officer_history->struct_size>=SAN14_OFFICER_HISTORY_API_V2_SIZE&&host->officer_history->set_event_mask;}
 San14Result apply_history(bool enabled){
     if(!history_supported())return enabled?SAN14_E_UNSUPPORTED:SAN14_OK;
     const bool before=history_lease;
