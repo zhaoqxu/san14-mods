@@ -43,7 +43,7 @@ const Feature features[]={
     {"fine_expert_mode",u8"精细专家模式",u8"按具体数值调整邻接加成（0–100），并在提案下设置手动战法有／无，使用原版六个分页与预设槽。请关闭剧本设定页面后切换。","scenario.parameters",Service::Scenario},
     {"persistent_area_officers",u8"府官保留与复归",u8"挂起玩家被俘或暂时失守府的原任府官及模式，随战局保存并在满足条件时自动恢复。","area.ai.persistent",Service::Area},
     {"spectator_autosave",u8"看海时自动存档",u8"允许看海时按游戏原有设置自动存档，沿用原版轮换槽。须同时开启游戏的自动存档；关闭此项恢复原版行为。","save.spectator.autosave"},
-    {"automatic_historical_events",u8"历史事件自动发生",u8"看海和自己操作时，满足原本触发条件的历史事件都会自动发生，包括不利于自己的事件。保留原版演出、选择和结果；关闭后恢复原版触发方式。","events.historical.automatic"},
+    {"automatic_historical_events",u8"历史事件自动发生",u8"看海和自己操作时，满足原本触发条件的历史事件都会自动发生，包括不利于自己的事件。看海时自动确认事件对白；自己操作时保留原版交互。关闭后恢复原版触发方式。","events.historical.automatic"},
     {"disable_tribal_officer_gifts",u8"禁止异族赠将",u8"禁止异族外交和对应事件赠送武将。","diplomacy.tribal_gifts.blocked",Service::Rule,u8"外交与异族"},
     {"disable_tribal_troop_replenish",u8"禁止异族增兵",u8"停止异族城市自动补充兵力，保留正常伤兵恢复。","cities.tribal_replenishment.blocked",Service::Rule,u8"外交与异族"},
     {"disable_foreign_trade",u8"禁止外国交易",u8"禁止与外国交易、留学及电脑发起的对应任务。","diplomacy.foreign_trade.blocked",Service::Rule,u8"外交与异族"},
