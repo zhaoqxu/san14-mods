@@ -1,8 +1,8 @@
 #pragma once
 
 namespace manager_identity {
-inline constexpr char version[]="0.2.0";
-inline constexpr wchar_t display_version[]=L"v0.2.0";
+inline constexpr char version[]="0.2.2";
+inline constexpr wchar_t display_version[]=L"v0.2.2";
 inline constexpr wchar_t title[]=L"模组管理";
 inline constexpr wchar_t author[]=L"作者：清都jsl";
 inline constexpr wchar_t author_url[]=L"https://space.bilibili.com/3690994744691528";
