@@ -1,6 +1,7 @@
 #include "san14_mod.h"
 #include "san14_idle.h"
 #include "san14_expert_page.h"
+#include "san14_reload.h"
 #include "settings_model.h"
 #include "pending_settings.h"
 #include "preset_dialog.h"
@@ -460,4 +461,12 @@ extern "C" SAN14_MOD_EXPORT San14Result SAN14_MOD_CALL SAN14Mod_Initialize(const
        h->ui_extended.struct_size<offsetof(San14UiExtendedApi,add_text_input)+sizeof(h->ui_extended.add_text_input)||!h->ui_extended.add_text_input)return SAN14_E_UNSUPPORTED;
     if(active)return SAN14_E_BUSY;
     host=h;*out={sizeof(*out),SAN14_HOST_ABI_V1,load,enable,disable,unload};return SAN14_OK;
+}
+
+// All callbacks are Host-owned; no threads, hooks or helper DLLs. Reasserting
+// the committed batch preflights native scenario editors without accepting a
+// pending UI draft. Host additionally requires the true title menu.
+extern "C" SAN14_MOD_EXPORT San14Result SAN14_MOD_CALL SAN14Mod_PrepareReloadV1(San14ModContext*){
+    try{return !host||!active?SAN14_OK:apply(current,true);}
+    catch(...){return SAN14_E_PLUGIN_FAILED;}
 }

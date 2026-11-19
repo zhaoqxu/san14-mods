@@ -474,6 +474,7 @@ int main(){
     wchar_t filename[MAX_PATH]{};GetModuleFileNameW(nullptr,filename,MAX_PATH);
     const auto dll=LoadLibraryW((std::filesystem::path(filename).parent_path()/"enhanced_settings.dll").c_str());assert(dll);
     const auto init=reinterpret_cast<San14Result(SAN14_MOD_CALL*)(const San14HostApi*,San14ModApi*)>(GetProcAddress(dll,"SAN14Mod_Initialize"));assert(init);
+    const auto prepare=reinterpret_cast<San14Result(SAN14_MOD_CALL*)(San14ModContext*)>(GetProcAddress(dll,"SAN14Mod_PrepareReloadV1"));assert(prepare);
     San14UiStyleApi style{sizeof(style),SAN14_UI_STYLE_EXPERT|SAN14_UI_STYLE_TINT|SAN14_UI_STYLE_ENABLED|SAN14_UI_STYLE_BUTTON_TEXT_TINT,style_selected,style_help,style_tint,style_enabled};
     San14UiSliderApi sliders{sizeof(sliders),ui_add_slider_fn,ui_set_slider_fn,ui_get_slider_fn};
     San14PagesApi pages{sizeof(pages),pages_register};
@@ -518,7 +519,7 @@ int main(){
     slide(0,160);assert(slider_value(0)==160&&custom_values.at("officer_stat_cap")==100&&range_tint("stat")==0xff1d63c7u&&scope_hint_visible());
     slide(0,100);assert(range_tint("stat")==0xff262018u);slide(0,160);
     assert(local_storage==staged_local&&ui.global_storage==staged_global&&batch_writes==staged_batches);
-    assert(custom_values.at("officer_stat_cap")==100&&slider_value(0)==160);
+    assert(prepare(&ctx)==SAN14_OK&&custom_values.at("officer_stat_cap")==100&&slider_value(0)==160);
     assert(local_storage==staged_local&&ui.global_storage==staged_global); // Preflight never commits the draft.
     click_text(u8"城市");click_text(u8"常规");assert(slider_value(0)==160&&range_tint("stat")==0xff1d63c7u);
     click_text(u8"城市");slide(0,61000);assert(range_tint("city.0")==0xff1d63c7u);
