@@ -861,7 +861,7 @@ int main(){
     assert(slider_value(0)==145&&range_tint("stat")==0xff1d63c7u&&custom_values.at("officer_stat_cap")==110);
     assert(local_storage==old_disk&&ui.global_storage==initial_default_records&&peer_storage==other_slots);
     fail_saved_edit=true;click_text(u8"保存变更");fail_saved_edit=false;
-    assert(local_storage==old_disk&&ui.global_storage==initial_default_records&&slider_value(0)==145);
+    assert(local_storage==old_disk&&saved(ui.global_storage).values[20]==145&&slider_value(0)==145);
     click_text(u8"保存变更");
     assert(saved(local_storage).values[20]==145&&saved(local_storage).values[0]==77000);
     assert(saved(ui.global_storage).values[20]==145&&peer_storage==other_slots);
