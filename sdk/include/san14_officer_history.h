@@ -62,6 +62,9 @@ enum San14OfficerHistoryRelease { SAN14_HISTORY_RELEASE_UNKNOWN=0,
  * ITEM: actor=recipient, subject=previous owner, object_id=item ID.
  * CITY: object_id=city ID, old/new_value=force IDs.
  * UNIT/CAPTURE: actor=winner/captor (possibly unknown), subject=loser/captive.
+ * UNIT object_id: area ID (1..500, 0 unknown/legacy). New UNIT records save
+ * only this area ID; legacy location_tile_id remains readable. Geography is
+ * shared by the fixed map and is not copied into each save attachment.
  * Flags bit 0 on FORCE: ownership change observed inside Employ.
  * DEATH bit 1: correlated lethal duel settlement; remaining low bits reserved. */
 typedef struct San14OfficerHistoryEvent {
