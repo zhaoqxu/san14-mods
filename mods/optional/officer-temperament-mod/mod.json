@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "officer-temperament-mod",
   "name": "一千个曹操",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "让战局中所有武将的情义、野心、汉室倾向、好战、外交、物资偏好和建设倾向与曹操一致。请在主菜单启用或停用。",
   "entry": {
     "type": "native",

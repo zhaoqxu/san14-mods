@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include "san14_mod.h"
+#include "san14_reload.h"
 #include <cassert>
 #include <iostream>
 
@@ -23,6 +24,7 @@ int main(){
     auto module=LoadLibraryW(L"officer_temperament.dll");assert(module);
     using Initialize=San14Result(SAN14_MOD_CALL*)(const San14HostApi*,San14ModApi*);
     auto initialize=reinterpret_cast<Initialize>(GetProcAddress(module,"SAN14Mod_Initialize"));assert(initialize);
+    auto prepare=reinterpret_cast<San14ModPrepareReloadV1>(GetProcAddress(module,"SAN14Mod_PrepareReloadV1"));assert(prepare);
     State state;San14HostApi host{};host.struct_size=sizeof(host);host.abi_version=SAN14_HOST_ABI_V1;host.host_context=&state;
     San14WorldApi world{};world.struct_size=offsetof(San14WorldApi,officer_temperament);host.world=&world;
     San14OfficerTemperamentApi service{};service.struct_size=sizeof(service);service.set_uniform_override=apply;
@@ -36,8 +38,12 @@ int main(){
     assert(plugin.on_load(&context)==SAN14_OK);
     state.result=SAN14_E_BUSY;assert(plugin.on_enable(&context)==SAN14_E_BUSY&&state.enabled==0);
     state.result=SAN14_OK;assert(plugin.on_enable(&context)==SAN14_OK&&state.enabled==1);
+    assert(prepare(&context)==SAN14_OK&&state.enabled==1&&state.disabled==0);
+    state.result=SAN14_E_BUSY;assert(plugin.on_disable(&context)==SAN14_E_BUSY&&state.disabled==0);
+    state.result=SAN14_OK;
     assert(plugin.on_disable(&context)==SAN14_OK&&state.disabled==1);
     plugin.on_unload(&context);
+    assert(prepare(&context)==SAN14_OK);
     assert(initialize(&host,&plugin)==SAN14_OK);plugin.on_unload(&context);
     FreeLibrary(module);
     std::cout<<"Optional temperament: legacy API rejection, template ownership, failure and release passed\n";

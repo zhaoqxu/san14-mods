@@ -1,4 +1,5 @@
 #include "san14_mod.h"
+#include "san14_reload.h"
 
 namespace {
 const San14HostApi* host=nullptr;
@@ -18,6 +19,12 @@ void SAN14_MOD_CALL unload(San14ModContext*) {
     temperament=nullptr;
     host=nullptr;
 }
+}
+
+// No private threads, hooks or callbacks are retained. The Host owns the
+// override lease; on_disable releases it and may veto a failed restoration.
+extern "C" SAN14_MOD_EXPORT San14Result SAN14_MOD_CALL SAN14Mod_PrepareReloadV1(San14ModContext*) {
+    return SAN14_OK;
 }
 
 extern "C" SAN14_MOD_EXPORT San14Result SAN14_MOD_CALL SAN14Mod_Initialize(
