@@ -166,6 +166,7 @@ San14Result SAN14_MOD_CALL scenario_bools(void*, const San14ScenarioBoolSpec* sp
 const San14ScenarioApi scenario_service{sizeof(San14ScenarioApi), scenario_query, scenario_configure, scenario_bools, nullptr};
 const std::map<std::string, std::string> expected_features = {
     {"spectator_autosave", "save.spectator.autosave"},
+    {"automatic_historical_events", "events.historical.automatic"},
     {"disable_tribal_officer_gifts", "diplomacy.tribal_gifts.blocked"},
     {"disable_foreign_trade", "diplomacy.foreign_trade.blocked"},
     {"disable_tribal_troop_replenish", "cities.tribal_replenishment.blocked"},
@@ -403,10 +404,10 @@ using Initialize = San14Result (SAN14_MOD_CALL*)(const San14HostApi*, San14ModAp
 void start(Initialize init, San14HostApi& host, San14ModApi& api, San14ModContext& context) {
     api = {}; api.struct_size = sizeof(api); assert(init(&host, &api) == SAN14_OK);
     context = {}; context.struct_size = sizeof(context);
-    assert(api.on_load(&context) == SAN14_OK && settings.size() == 20);
+    assert(api.on_load(&context) == SAN14_OK && settings.size() == 21);
     std::map<std::string, int> categories;
     for (const auto& s : settings) ++categories[key(s.category)];
-    assert(categories.size() == 4 && categories[u8"常规"] == 4 && categories[u8"外交与异族"] == 3 && categories[u8"武将与军团"] == 8 && categories[u8"报告与演出"] == 5);
+    assert(categories.size() == 4 && categories[u8"常规"] == 5 && categories[u8"外交与异族"] == 3 && categories[u8"武将与军团"] == 8 && categories[u8"报告与演出"] == 5);
     std::map<std::string, int> seen;
     for (const auto& s : settings) {
         assert(expected_features.count(key(s.key)) && ++seen[key(s.key)] == 1 && s.default_value == 0 && s.changed && s.label.length && s.description.length);
@@ -452,7 +453,7 @@ void test_companion(Initialize init) {
     assert(api.on_disable(&context) == SAN14_OK); all_rules_off(); assert(rule_calls == previous_calls);
     assert(api.on_disable(&context) == SAN14_OK && rule_calls == previous_calls); assert(change("global_death_notices", 1) == SAN14_E_BUSY);
     all_preferences(true);
-    assert(api.on_enable(&context) == SAN14_OK && rules.size() == 20 && registered_hotkeys.size() == 1 && scenario_choice);
+    assert(api.on_enable(&context) == SAN14_OK && rules.size() == 21 && registered_hotkeys.size() == 1 && scenario_choice);
     assert(!rule_calls.count("officers.merit.extended"));
     assert(registered_area.on_sync);
     for (const auto& r : rules) assert(r.second == 1);
@@ -689,7 +690,7 @@ int main() {
     test_game_speed_setting(init);
     test_force_control_menu(init);
     test_force_control_host_ui(init);
-    std::cout << "Companion plugin: ABI, 20 features, speed slider, scenario choice, copied policies, lazy areas, F8 rollback, lifecycle passed\n";
+    std::cout << "Companion plugin: ABI, 21 features, speed slider, scenario choice, copied policies, lazy areas, F8 rollback, lifecycle passed\n";
     FreeLibrary(dll);
     return 0;
 }
