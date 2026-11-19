@@ -12,26 +12,6 @@
     "abi": 1
   },
   "host_version": ">=0.2.1 <0.3.0",
-  "game_builds": [
-    25953384,
-    25953386,
-    25953385,
-    25953387,
-    10110001,
-    10110002,
-    10260001,
-    10260002
-  ],
-  "game_exe_sha256": [
-    "2cae6d6acb9ff362caa19162a6158afdb73e1a3e957a6347ed52ad902eb8aa3b",
-    "2e49348aa1b9be5cfca651e71c8d77b2e4bd2d11387edc0b0236f4352458a239",
-    "3c5e772bb4b2524d855971f4820656ec16da42f048247d9b0b9296d7964760fe",
-    "e4be0f6c0ea3feec02f05e725a7a6be84d70cd1cc0bb96931a3656fbac125810",
-    "42d53bb42c033c6027b6da75e8077f4170f4d684abb0f57483a661225d052025",
-    "c3435f55b3ece9e5fe720a846d4e5a557e699aeb7b534d64e2ff384fa8eeca35",
-    "71194f07ac24feb5a1338a12994087100cbbee587dcfe490b20fc5dba6e2ac9e",
-    "05d9f9e0a94fd51ae5dfb93470a7ad0ec1b8ea5abc331d8a15df2165d08b51a5"
-  ],
   "dependencies": [],
   "conflicts": [],
   "permissions": [
