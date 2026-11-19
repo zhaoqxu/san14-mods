@@ -2,6 +2,7 @@
 // UI-only cooperative tasks, idle subscriptions and trusted Host storage
 // notifications. This module owns no game hooks and synthesizes no lifecycle.
 #include "san14_host.h"
+#include "plugin_call_gate.h"
 #include "san14_idle.h"
 #include <algorithm>
 #include <chrono>
@@ -27,6 +28,7 @@ struct Backend {
     uint64_t (*clock_us)(void*)=nullptr;
     // Optional thread gate for Host storage-event publish(); defaults to on_ui.
     bool (*on_event_publish)(void*)=nullptr;
+    plugin_calls::Hooks calls;
 };
 
 struct Limits {
@@ -176,7 +178,7 @@ public:
                 const auto found=subscriptions_.find(item.first);if(found==subscriptions_.end())continue;
                 const Subscription event=found->second;
                 if(!live_owner(event.owner)||!backend_.event_allowed(backend_.user,event.owner,view.event_id)){subscriptions_.erase(found);continue;}
-                try{backend_.invoke_event(backend_.user,event.callback,event.context,&view);}catch(...){failed=true;}
+                try{plugin_calls::Lease lease(backend_.calls,event.owner);if(lease)backend_.invoke_event(backend_.user,event.callback,event.context,&view);}catch(...){failed=true;}
             }
             return failed?SAN14_E_PLUGIN_FAILED:SAN14_OK;
         });
@@ -215,7 +217,7 @@ public:
                     const Task task=found->second;tasks_.erase(found); // consume before user callback
                     if(!live_owner(task.owner)||!backend_.invoke_task){++last_pump_.inactive_dropped;continue;}
                     ++last_pump_.tasks_executed;
-                    try{backend_.invoke_task(backend_.user,task.callback,task.context);}
+                    try{plugin_calls::Lease lease(backend_.calls,task.owner);if(lease)backend_.invoke_task(backend_.user,task.callback,task.context);}
                     catch(...){++last_pump_.callback_failures;}
                 }else {
                     const auto found=subscriptions_.find(item.handle);if(found==subscriptions_.end())continue;
@@ -227,7 +229,7 @@ public:
                     const San14IdleInfo info{sizeof(San14IdleInfo),last_ms_,static_cast<uint32_t>(budget_us-spent)};
                     const San14EventView view{sizeof(San14EventView),SAN14_EVENT_UI_IDLE,0,&info,sizeof(info),0};
                     ++last_pump_.events_delivered;
-                    try{backend_.invoke_event(backend_.user,event.callback,event.context,&view);}
+                    try{plugin_calls::Lease lease(backend_.calls,event.owner);if(lease)backend_.invoke_event(backend_.user,event.callback,event.context,&view);}
                     catch(...){++last_pump_.callback_failures;}
                 }
             }

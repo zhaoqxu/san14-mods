@@ -14,6 +14,19 @@ class PluginPe {
         for(unsigned n=0;n<65536;n++){uint64_t v=get<uint64_t>(offset(thunk)+n*8);if(!v)return;if(v&IMAGE_ORDINAL_FLAG64)continue;if(v>0xffffffffu||forbidden(str((DWORD)v+2)))throw std::runtime_error("Forbidden import");}throw std::runtime_error("Unterminated import table");
     }
 public:
+    bool has_export(const std::string& name)const{
+        const auto ex=nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+        if(!ex.VirtualAddress)return false;
+        const auto e=get<IMAGE_EXPORT_DIRECTORY>(offset(ex.VirtualAddress));
+        if(e.NumberOfNames>65536)throw std::runtime_error("Invalid export table");
+        for(DWORD i=0;i<e.NumberOfNames;++i)if(str(get<DWORD>(offset(e.AddressOfNames)+i*4))==name){
+            const auto ord=get<WORD>(offset(e.AddressOfNameOrdinals)+i*2);
+            if(ord>=e.NumberOfFunctions)throw std::runtime_error("Invalid export ordinal");
+            const auto target=get<DWORD>(offset(e.AddressOfFunctions)+ord*4);
+            if(target>=ex.VirtualAddress&&uint64_t(target)<uint64_t(ex.VirtualAddress)+ex.Size)return false;
+            offset(target);return true;
+        }return false;
+    }
     PluginPe(const std::vector<unsigned char>& bytes,bool network):b(bytes){
         auto dos=get<IMAGE_DOS_HEADER>(0);if(dos.e_magic!=IMAGE_DOS_SIGNATURE||dos.e_lfanew<0)throw std::runtime_error("Not a PE DLL");nt=get<IMAGE_NT_HEADERS64>((size_t)dos.e_lfanew);
         if(nt.Signature!=IMAGE_NT_SIGNATURE||nt.FileHeader.Machine!=IMAGE_FILE_MACHINE_AMD64||nt.OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC||!(nt.FileHeader.Characteristics&IMAGE_FILE_DLL)||nt.FileHeader.NumberOfSections>96||nt.FileHeader.SizeOfOptionalHeader<sizeof(IMAGE_OPTIONAL_HEADER64))throw std::runtime_error("Expected AMD64 PE32+ DLL");

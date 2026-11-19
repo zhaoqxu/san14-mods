@@ -1,4 +1,5 @@
 #pragma once
+#include "plugin_call_gate.h"
 
 // Generic plugin-owned UI resources. Game addresses and SEH live in the injected
 // Base backend, never in this registry or the plugin-facing ABI.
@@ -58,6 +59,7 @@ struct Backend {
     bool (*log_rows)(void*,void*,const std::vector<intelligence_log::Row>&) = nullptr;
     bool (*enabled)(void*,void* control,bool enabled) = nullptr;
     bool (*tint_button_text)(void*,void* control,uint32_t argb) = nullptr;
+    plugin_calls::Hooks calls;
 };
 
 class Runtime {
@@ -558,7 +560,7 @@ public:
         if (!backend_.owner_allowed(backend_.user, owner)) return true;
         // Do not retain references across arbitrary plugin code. A callback may
         // close the panel, disable the Mod, or replace this entire stack.
-        if (callback) backend_.invoke(backend_.user, callback, context, handle);
+        if (callback){plugin_calls::Lease lease(backend_.calls,owner);if(lease)backend_.invoke(backend_.user, callback, context, handle);}
         return true;
     }
     bool key_down(uint32_t key,bool control=false,bool shift=false) {
@@ -584,7 +586,7 @@ public:
         }
         if(!c){if((key==0x0d||key==0x20)&&navigation_){auto i=controls_.find(navigation_);
             if(i!=controls_.end()&&i->second->enabled&&i->second->panel==top_panel()&&i->second->callback&&backend_.owner_allowed(backend_.user,i->second->owner)){
-                auto callback=i->second->callback;auto context=i->second->context;auto id=i->first;backend_.invoke(backend_.user,callback,context,id);}}
+                auto callback=i->second->callback;auto context=i->second->context;auto id=i->first;plugin_calls::Lease lease(backend_.calls,i->second->owner);if(lease)backend_.invoke(backend_.user,callback,context,id);}}
             return true;}
         if(control&&key=='A'){c->anchor=0;c->caret=c->value->size();repaint(*c);return true;}
         if(key==0x08||key==0x2e){last_text_result_=erase_focused(key==0x08);return true;}
@@ -730,8 +732,9 @@ private:
         auto context = c->context;
         auto owner = c->owner;
         auto handle = c->handle;
-        if (callback && backend_.invoke_int && backend_.owner_allowed(backend_.user, owner))
-            backend_.invoke_int(backend_.user, callback, context, handle, next);
+        if (callback && backend_.invoke_int && backend_.owner_allowed(backend_.user, owner)){
+            plugin_calls::Lease lease(backend_.calls,owner);if(lease)backend_.invoke_int(backend_.user, callback, context, handle, next);
+        }
     }
 
     void show_help(San14ControlHandle source) {
@@ -891,8 +894,9 @@ private:
     void notify_changed(San14ControlHandle handle,const std::string& text) {
         auto found=controls_.find(handle);if(found==controls_.end())return;
         auto callback=found->second->changed;auto context=found->second->context;auto owner=found->second->owner;
-        if(callback&&backend_.invoke_text&&backend_.owner_allowed(backend_.user,owner))
-            backend_.invoke_text(backend_.user,callback,context,handle,{text.data(),static_cast<uint32_t>(text.size())});
+        if(callback&&backend_.invoke_text&&backend_.owner_allowed(backend_.user,owner)){
+            plugin_calls::Lease lease(backend_.calls,owner);if(lease)backend_.invoke_text(backend_.user,callback,context,handle,{text.data(),static_cast<uint32_t>(text.size())});
+        }
     }
     San14Result replace_focused(std::wstring_view inserted) {
         return guard([&]{
