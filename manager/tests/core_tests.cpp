@@ -27,6 +27,12 @@ int main(){
     assert(api->admit_mod(root.c_str(),&identity,nullptr,0,&required,error,sizeof(error))==SAN14_E_BUFFER_TOO_SMALL);
     std::vector<char> normalized(required);assert(api->admit_mod(root.c_str(),&identity,normalized.data(),required,&required,error,sizeof(error))==SAN14_OK);
     assert(json::parse(normalized.data()).at("_sha256").str()==hash);
+    auto credits=[&](const std::string& value){auto text=manifest;text.insert(1,"\"coauthors\":"+value+",");write_atomic(root/L"mod.json",text.data(),text.size());return api->admit_mod(root.c_str(),&identity,nullptr,0,&required,error,sizeof(error));};
+    assert(credits(u8R"([{"name":"黑色曲奇","url":"https://steamcommunity.com/profiles/76561198090135353"}])")==SAN14_E_BUFFER_TOO_SMALL);
+    normalized.resize(required);assert(api->admit_mod(root.c_str(),&identity,normalized.data(),required,&required,error,sizeof(error))==SAN14_OK);
+    assert(json::parse(normalized.data()).at("coauthors").array[0].at("url").str()=="https://steamcommunity.com/profiles/76561198090135353");
+    for(const auto& value:{"null","{}","[1]","[\"Legacy\"]","[{\"name\":\"\"}]","[{\"name\":\"a\",\"url\":\"javascript:alert(1)\"}]","[{\"name\":\"a\"},{\"name\":\"a\"}]"})assert(credits(value)==SAN14_E_INVALID_ARGUMENT);
+    write_atomic(root/L"mod.json",manifest.data(),manifest.size());
     identity.game_build=2;assert(api->admit_mod(root.c_str(),&identity,nullptr,0,&required,error,sizeof(error))!=SAN14_OK);
     auto adapter=root/L"SAN14Base"/L"GameAdapter";fs::create_directories(adapter);
     auto put=[&](const fs::path& dll,const std::string& expected_id="fixture-adapter"){

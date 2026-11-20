@@ -18,3 +18,7 @@ SDK 的 memory-reader 示例仅通过权限受控接口验证模块 PE 头，不
 战功和武将事迹中的战斗地点使用可选 [战功统计接口](docs/BATTLEFIELD_STATS.md)。
 
 城市与区域的阵亡统计使用可选 [战斗页签接口](docs/TERRITORY_BATTLE_STATS.md)。
+
+## 作者署名
+
+`author` 和 `author_url` 表示第一作者。可选 `coauthors` 为按署名顺序排列的 `{ "name": "姓名", "url": "https://…" }` 对象数组（最多 16 项），表示第二作者及后续共同作者。`contributors` 继续表示贡献者。姓名分别链接到各自的 URL；只有一名共同作者时列表显示「第二作者」。需要同时支持该字段的管理器及 GameAdapter。
