@@ -7,7 +7,7 @@
   "summary": "声明分类、开关和数值，自动生成原版风格设置页。",
   "description": "演示 ExpertPage 的分类分页、原生有无按钮、整数调节、标准值、说明联动和设置持久化。",
   "entry": {"type": "native", "path": "bin/win-x64/expert_page.dll", "abi": 1},
-  "host_version": ">=0.2.0 <0.3.0",
+  "host_version": ">=0.2.0 <0.4.0",
   "dependencies": [],
   "conflicts": [],
   "permissions": ["ui.panel", "storage.global"],

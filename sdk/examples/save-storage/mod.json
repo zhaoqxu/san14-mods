@@ -7,7 +7,7 @@
   "summary": "一个随原版存档保存、读档回退的计数器。",
   "description": "演示 storage.save 与存储上下文 revision：增加计数，正常保存游戏，再读回旧档即可观察计数回退。",
   "entry": {"type": "native", "path": "bin/win-x64/save_storage.dll", "abi": 1},
-  "host_version": ">=0.2.0 <0.3.0",
+  "host_version": ">=0.2.0 <0.4.0",
   "dependencies": [],
   "conflicts": [],
   "permissions": ["ui.panel", "storage.save"],

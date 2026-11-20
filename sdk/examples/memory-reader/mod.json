@@ -6,7 +6,7 @@
   "author": "Example Author",
   "description": "Copies the admitted game module header through the optional read-only memory service.",
   "entry": {"type": "native", "path": "bin/win-x64/memory_reader.dll", "abi": 1},
-  "host_version": ">=0.2.0 <0.3.0",
+  "host_version": ">=0.2.0 <0.4.0",
   "game_builds": [25953384, 25953386, 25953385, 25953387, 10110001, 10110002, 10260001, 10260002],
   "game_exe_sha256": [
     "2cae6d6acb9ff362caa19162a6158afdb73e1a3e957a6347ed52ad902eb8aa3b",

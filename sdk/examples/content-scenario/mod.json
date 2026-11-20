@@ -9,7 +9,7 @@
     "type": "content",
     "path": "content/scenario.json"
   },
-  "host_version": ">=0.2.0 <0.3.0",
+  "host_version": ">=0.2.0 <0.4.0",
   "game_builds": [
     25953386
   ],

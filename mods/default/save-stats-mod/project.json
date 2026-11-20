@@ -1,8 +1,8 @@
 {
   "name": "san14-save-stats-mod",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "kind": "native",
   "sdk": "san14-mod-sdk",
-  "sdk_version": "0.2.0",
+  "sdk_version": "0.3.0",
   "requires_local_game_scenario": false
 }

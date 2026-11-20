@@ -1,6 +1,6 @@
 {
   "name": "san14-mod-sdk",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "abi": 1,
   "kind": "sdk",
   "plugin_dependencies": []

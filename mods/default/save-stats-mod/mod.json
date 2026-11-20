@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "save-stats-mod",
   "name": "存档数据统计",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "清都jsl",
   "author_url": "https://space.bilibili.com/3690994744691528",
   "description": "武将表提供成长、内政、战斗与战功统计；武将事迹记录个人经历和战法明细。自势力／全势力的城市、区域表增加“战斗”页，累计各方在当地阵亡的士兵，排除伤兵与转移；城市按固定所属区域汇总。只从开启后累计，旧战斗不补算；记录随存读档回退。",
@@ -11,7 +11,7 @@
     "path": "bin/win-x64/save_stats.dll",
     "abi": 1
   },
-  "host_version": ">=0.2.0 <0.3.0",
+  "host_version": ">=0.3.0 <0.4.0",
   "dependencies": [],
   "conflicts": [],
   "permissions": [
