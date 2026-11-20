@@ -5,13 +5,7 @@
   "version": "0.3.0",
   "author": "清都jsl",
   "author_url": "https://space.bilibili.com/3690994744691528",
-  "contributors": [
-    {
-      "name": "coocookie123",
-      "url": "https://github.com/coocookie123/SAN14-Optimizer-Launcher"
-    }
-  ],
-  "description": "面向电脑势力的战术、行为树与外交AI增强：融合清都jsl原有攻城配兵、动态外交、水域防御、应急增援、器械截击与施政排序，并移植增强coocookie123的出兵编成、集结齐进、会战协同、野战撤退、雁行站位、城下迎击、攻城评估与守关8项模块。",
+  "description": "面向电脑势力的战术、行为树与外交AI增强：融合清都jsl原有攻城配兵、动态外交、水域防御、应急增援、器械截击与施政排序，并移植增强黑色曲奇的出兵编成、集结齐进、会战协同、野战撤退、雁行站位、城下迎击、攻城评估与守关8项模块。",
   "entry": {
     "type": "native",
     "path": "bin/win-x64/ai_iq.dll",
@@ -51,5 +45,11 @@
   "default_enabled": true,
   "disable_mode": "hot",
   "load_order": 30,
-  "source_url": "https://github.com/zhaoqxu/san14-mods/tree/main/mods/default/ai-iq-mod"
+  "source_url": "https://github.com/zhaoqxu/san14-mods/tree/main/mods/default/ai-iq-mod",
+  "coauthors": [
+    {
+      "name": "黑色曲奇",
+      "url": "https://steamcommunity.com/profiles/76561198090135353"
+    }
+  ]
 }

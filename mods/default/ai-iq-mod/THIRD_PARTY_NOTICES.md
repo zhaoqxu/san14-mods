@@ -3,7 +3,7 @@
 This component includes tactical AI behavior-tree policy modules ported and adapted from:
 
 - **SAN14-Optimizer-Launcher**
-  - Author: coocookie123
+  - Author: [黑色曲奇](https://steamcommunity.com/profiles/76561198090135353) (coocookie123)
   - Source: https://github.com/coocookie123/SAN14-Optimizer-Launcher
   - License: MIT
 
