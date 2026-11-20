@@ -14,7 +14,7 @@ tests/                   默认／可选分组和打包检查
 
 `default` 表示常规打包范围，各 Mod 的启用偏好仍由各自清单和用户设置决定。`optional` 不进入默认 Mod 包。组件独立版本记录在各自 `mod.json` 或 `project.json`，源码来源提交见 [sources.lock.json](sources.lock.json)。
 
-实际游戏内存地址、版本布局、Hook 和原生命令适配源码位于独立的私有 GameAdapter 仓库。本仓不包含游戏文件、存档或该适配源码。默认构建会从公开 [0.2.2 Release](https://github.com/zhaoqxu/san14-mods/releases/tag/v0.2.2) 下载匹配编译件，不需要私有仓权限。
+实际游戏内存地址、版本布局、Hook 和原生命令适配源码位于独立的私有 GameAdapter 仓库。本仓不包含游戏文件、存档或该适配源码。默认构建会从公开 [0.3.0 Release](https://github.com/zhaoqxu/san14-mods/releases/tag/v0.3.0) 下载匹配编译件，不需要私有仓权限。
 
 ## 构建
 
@@ -41,7 +41,7 @@ py -3.12 -m venv .venv
 
 ```powershell
 ./build.ps1 -Offline -Tests -ArtifactRoot build/first
-./build.ps1 -Offline -AdapterArchive './SAN14-GameAdapter-0.1.0-for-0.2.2-r2-win64.zip' -Tests
+./build.ps1 -Offline -AdapterArchive './SAN14-GameAdapter-0.1.0-for-0.3.0-win64.zip' -Tests
 ```
 
 只研究通用 Host、希望跳过二进制获取时，使用 `-SkipGameAdapter`，此时不生成完整运行包和安装器。`-Target mods` 或 `-Target worker` 本身不下载适配器。构建只生成文件，安装时请手动运行 Setup。
